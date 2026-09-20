@@ -68,13 +68,13 @@ public abstract class CrafterBlockEntityMixin extends BlockEntity implements Tar
             return;
         }
 
-        CraftingRecipe recipe = CrafterTargeting.recipeFor(this.level.getServer(), this.level, target);
-        if (recipe == null) {
+        net.minecraft.world.item.crafting.RecipeHolder<CraftingRecipe> holder =
+                CrafterTargeting.recipeFor(this.level.getServer(), this.level, target);
+        if (holder == null) {
             return;
         }
 
-        CrafterBlockEntity self = (CrafterBlockEntity) (Object) this;
-        if (!CrafterTargeting.accepts(recipe, self, slot, stack)) {
+        if (!CrafterTargeting.accepts(holder.value(), slot, stack)) {
             cir.setReturnValue(false);
         }
     }

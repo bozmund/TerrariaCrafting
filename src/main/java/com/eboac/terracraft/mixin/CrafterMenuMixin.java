@@ -120,11 +120,11 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
         }
         terracraft$lastTarget = target.copy();
 
-        CraftingRecipe recipe = CrafterTargeting.recipeFor(
+        net.minecraft.world.item.crafting.RecipeHolder<CraftingRecipe> holder = CrafterTargeting.recipeFor(
                 blockEntity.getLevel().getServer(), blockEntity.getLevel(), target);
 
         ServerPlayNetworking.send(serverPlayer,
-                new CrafterNeedsPayload(recipe == null ? List.of() : CrafterTargeting.needs(recipe)));
+                new CrafterNeedsPayload(holder == null ? List.of() : CrafterTargeting.needs(holder.value())));
     }
 
     /** Vanilla's shift-click logic knows nothing about our slot and would index past its ranges. */

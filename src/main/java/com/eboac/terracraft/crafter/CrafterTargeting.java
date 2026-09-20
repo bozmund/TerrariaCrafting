@@ -2,7 +2,9 @@ package com.eboac.terracraft.crafter;
 
 import it.unimi.dsi.fastutil.ints.IntList;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.CraftingInput;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.PlacementInfo;
@@ -13,19 +15,29 @@ import net.minecraft.world.level.block.entity.CrafterBlockEntity;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The rules that turn a crafter's target item into behaviour: which inputs it accepts, and how
- * its grid should be arranged so vanilla can craft the thing.
+ * The rules that turn a crafter's target item into behaviour.
+ *
+ * <p>A targeted crafter stops being a 3x3 grid and becomes a machine with ingredient hoppers:
+ * slot <em>i</em> is dedicated to the target recipe's <em>i</em>th distinct ingredient and holds a
+ * whole stack of it. One craft spends however many that recipe calls for -- five iron out of one
+ * stack of iron, rather than one item out of each of five cells.
  */
 public final class CrafterTargeting {
 
     public static final int GRID = 3;
     public static final int SLOTS = GRID * GRID;
 
+    /** One dedicated ingredient slot: what it accepts, what to draw for it, how many per craft. */
+    public record Requirement(Ingredient ingredient, ItemStack display, int count) {
+    }
+
     /** Item -> the recipe making it. Null values are cached too, so unmakeable targets stay cheap. */
-    private static final java.util.Map<net.minecraft.world.item.Item, CraftingRecipe> RECIPE_FOR_ITEM =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<Item, RecipeHolder<CraftingRecipe>> RECIPE_FOR_ITEM = new ConcurrentHashMap<>();
+    private static final RecipeHolder<CraftingRecipe> NONE = null;
 
     private CrafterTargeting() {
     }
@@ -36,9 +48,9 @@ public final class CrafterTargeting {
      * <p>Cached per item: this is asked on every hopper insertion attempt, and walking the whole
      * recipe list each time would make a hopper line into a tick sink.
      */
-    public static CraftingRecipe recipeFor(MinecraftServer server, Level level, ItemStack target) {
+    public static RecipeHolder<CraftingRecipe> recipeFor(MinecraftServer server, Level level, ItemStack target) {
         if (target.isEmpty()) {
-            return null;
+            return NONE;
         }
         return RECIPE_FOR_ITEM.computeIfAbsent(target.getItem(), item -> {
             for (RecipeHolder<?> holder : server.getRecipeManager().getRecipes()) {
@@ -49,101 +61,102 @@ public final class CrafterTargeting {
                 }
                 ItemStack result = com.eboac.terracraft.craft.RecipeScanner.preview(recipe, level);
                 if (!result.isEmpty() && result.is(item)) {
-                    return recipe;
+                    @SuppressWarnings("unchecked")
+                    RecipeHolder<CraftingRecipe> typed = (RecipeHolder<CraftingRecipe>) holder;
+                    return typed;
                 }
             }
-            return null;
+            return NONE;
         });
     }
 
     /**
-     * Whether a crafter set to this recipe should accept {@code stack} into {@code slot}.
+     * The recipe's distinct ingredients with how many of each one craft consumes.
      *
-     * <p>Accepting only what the recipe calls for is the whole point of the feature: a hopper can
-     * be pointed at a crafter without needing a filter in front of it.
+     * <p>{@code ingredients()} is one entry per grid cell, not one per distinct item, so a recipe
+     * wanting five iron ingots arrives as five separate entries. Grouping them is what turns a
+     * grid into a short list of hoppers.
      */
-    public static boolean accepts(CraftingRecipe recipe, CrafterBlockEntity crafter, int slot, ItemStack stack) {
-        PlacementInfo placement = recipe.placementInfo();
-        List<Ingredient> ingredients = placement.ingredients();
-
-        boolean wanted = ingredients.stream().anyMatch(ingredient -> ingredient.test(stack));
-        if (!wanted) {
-            return false;
-        }
-
-        // One grid slot feeds one cell of the recipe, so there is no point stacking more copies of
-        // an ingredient than the recipe has cells for it.
-        int cellsNeeding = 0;
-        IntList slotToIngredient = placement.slotsToIngredientIndex();
-        for (int i = 0; i < slotToIngredient.size(); i++) {
-            int index = slotToIngredient.getInt(i);
-            if (index != PlacementInfo.EMPTY_SLOT && ingredients.get(index).test(stack)) {
-                cellsNeeding++;
-            }
-        }
-
-        int alreadyHeld = 0;
-        for (int i = 0; i < SLOTS; i++) {
-            if (i != slot && !crafter.getItem(i).isEmpty() && ItemStack.isSameItem(crafter.getItem(i), stack)) {
-                alreadyHeld++;
-            }
-        }
-        return alreadyHeld < cellsNeeding;
-    }
-
-    /**
-     * What the recipe wants, as one stack per distinct ingredient with its count set to the
-     * number of grid cells calling for it.
-     */
-    public static List<ItemStack> needs(CraftingRecipe recipe) {
+    public static List<Requirement> requirements(CraftingRecipe recipe) {
         PlacementInfo placement = recipe.placementInfo();
         IntList slotToIngredient = placement.slotsToIngredientIndex();
         List<Ingredient> ingredients = placement.ingredients();
 
-        int width = GRID;
-        if (recipe instanceof ShapedRecipe shaped) {
-            width = shaped.getWidth();
-        }
+        List<Ingredient> distinct = new ArrayList<>();
+        List<Integer> counts = new ArrayList<>();
 
-        List<ItemStack> cells = new ArrayList<>(SLOTS);
-        for (int i = 0; i < SLOTS; i++) {
-            cells.add(ItemStack.EMPTY);
-        }
-
-        // Laid out exactly where arrange() will put things, so the ghosts the player sees are
-        // the cells that will actually be filled.
         for (int cell = 0; cell < slotToIngredient.size(); cell++) {
             int index = slotToIngredient.getInt(cell);
             if (index == PlacementInfo.EMPTY_SLOT) {
                 continue;
             }
-            int row = cell / width;
-            int column = cell % width;
-            if (row >= GRID || column >= GRID) {
-                continue;
+            Ingredient ingredient = ingredients.get(index);
+
+            int existing = distinct.indexOf(ingredient);
+            if (existing >= 0) {
+                counts.set(existing, counts.get(existing) + 1);
+            } else {
+                distinct.add(ingredient);
+                counts.add(1);
             }
-            int destination = row * GRID + column;
+        }
+
+        List<Requirement> requirements = new ArrayList<>(distinct.size());
+        for (int i = 0; i < distinct.size() && requirements.size() < SLOTS; i++) {
             // A tag ingredient accepts many items; the first stands in for the rest on screen.
-            int finalDestination = destination;
-            ingredients.get(index).items().findFirst()
-                    .ifPresent(holder -> cells.set(finalDestination, new ItemStack(holder)));
+            ItemStack display = distinct.get(i).items().findFirst()
+                    .map(ItemStack::new).orElse(ItemStack.EMPTY);
+            if (!display.isEmpty()) {
+                display.setCount(counts.get(i));
+                requirements.add(new Requirement(distinct.get(i), display, counts.get(i)));
+            }
+        }
+        return requirements;
+    }
+
+    /** What the client draws: one entry per crafter slot, empty where that slot is unused. */
+    public static List<ItemStack> needs(CraftingRecipe recipe) {
+        List<Requirement> requirements = requirements(recipe);
+        List<ItemStack> cells = new ArrayList<>(SLOTS);
+        for (int i = 0; i < SLOTS; i++) {
+            cells.add(i < requirements.size() ? requirements.get(i).display().copy() : ItemStack.EMPTY);
         }
         return cells;
     }
 
     /**
-     * Shuffles the crafter's grid so the items sit where {@code recipe} expects them.
+     * Whether a crafter set to this recipe should accept {@code stack} into {@code slot}.
      *
-     * <p>Vanilla matches the grid against recipes by shape, so a hopper dropping planks into
-     * whatever slot happens to be free would never line up. Rearranging just before the craft lets
-     * vanilla do the actual crafting, ejecting and advancement work untouched.
-     *
-     * @return true if the grid now holds the recipe
+     * <p>Each slot belongs to exactly one ingredient, so a hopper can be pointed at a crafter
+     * without a filter in front of it and the items sort themselves.
      */
-    public static boolean arrange(CraftingRecipe recipe, CrafterBlockEntity crafter) {
+    public static boolean accepts(CraftingRecipe recipe, int slot, ItemStack stack) {
+        List<Requirement> requirements = requirements(recipe);
+        return slot >= 0 && slot < requirements.size() && requirements.get(slot).ingredient().test(stack);
+    }
+
+    /** True if every dedicated slot holds enough for one craft. */
+    public static boolean canCraft(CraftingRecipe recipe, CrafterBlockEntity crafter) {
+        List<Requirement> requirements = requirements(recipe);
+        for (int i = 0; i < requirements.size(); i++) {
+            if (crafter.getItem(i).getCount() < requirements.get(i).count()) {
+                return false;
+            }
+        }
+        return !requirements.isEmpty();
+    }
+
+    /**
+     * Builds the grid the recipe expects, drawing one item per cell from the dedicated slots.
+     *
+     * <p>The crafter's own layout is a list of stacks, which no recipe would match, so this
+     * reconstructs the shape purely to hand to {@code matches} and {@code assemble}.
+     */
+    public static CraftingInput asRecipeInput(CraftingRecipe recipe, CrafterBlockEntity crafter) {
         PlacementInfo placement = recipe.placementInfo();
         IntList slotToIngredient = placement.slotsToIngredientIndex();
         List<Ingredient> ingredients = placement.ingredients();
+        List<Requirement> requirements = requirements(recipe);
 
         int width = GRID;
         int height = GRID;
@@ -152,77 +165,43 @@ public final class CrafterTargeting {
             height = shaped.getHeight();
         }
 
-        // Snapshot what we have, ignoring slots the player has switched off.
-        List<ItemStack> pool = new ArrayList<>();
-        List<Integer> poolSlots = new ArrayList<>();
-        for (int i = 0; i < SLOTS; i++) {
-            if (crafter.isSlotDisabled(i)) {
-                continue;
-            }
-            ItemStack stack = crafter.getItem(i);
-            if (!stack.isEmpty()) {
-                pool.add(stack);
-                poolSlots.add(i);
-            }
+        List<ItemStack> grid = new ArrayList<>(width * height);
+        for (int i = 0; i < width * height; i++) {
+            grid.add(ItemStack.EMPTY);
         }
 
-        ItemStack[] arranged = new ItemStack[SLOTS];
-        java.util.Arrays.fill(arranged, ItemStack.EMPTY);
-        boolean[] used = new boolean[pool.size()];
-
-        for (int cell = 0; cell < slotToIngredient.size(); cell++) {
+        for (int cell = 0; cell < slotToIngredient.size() && cell < grid.size(); cell++) {
             int index = slotToIngredient.getInt(cell);
             if (index == PlacementInfo.EMPTY_SLOT) {
                 continue;
             }
-            int row = cell / width;
-            int column = cell % width;
-            if (row >= height || row >= GRID || column >= GRID) {
-                return false;
-            }
-            int destination = row * GRID + column;
-            if (crafter.isSlotDisabled(destination)) {
-                return false;
-            }
-
-            Ingredient ingredient = ingredients.get(index);
-            int chosen = -1;
-            for (int i = 0; i < pool.size(); i++) {
-                if (!used[i] && ingredient.test(pool.get(i))) {
-                    chosen = i;
-                    break;
-                }
-            }
-            if (chosen < 0) {
-                return false;
-            }
-            used[chosen] = true;
-            arranged[destination] = pool.get(chosen);
-        }
-
-        // Anything the recipe did not ask for stays in the crafter rather than vanishing.
-        for (int i = 0; i < pool.size(); i++) {
-            if (used[i]) {
+            int source = requirements.indexOf(findRequirement(requirements, ingredients.get(index)));
+            if (source < 0) {
                 continue;
             }
-            int free = -1;
-            for (int j = 0; j < SLOTS; j++) {
-                if (arranged[j].isEmpty() && !crafter.isSlotDisabled(j)) {
-                    free = j;
-                    break;
-                }
+            ItemStack held = crafter.getItem(source);
+            if (!held.isEmpty()) {
+                grid.set(cell, held.copyWithCount(1));
             }
-            if (free < 0) {
-                return false;
-            }
-            arranged[free] = pool.get(i);
         }
 
-        for (int i = 0; i < SLOTS; i++) {
-            if (!crafter.isSlotDisabled(i)) {
-                crafter.setItem(i, arranged[i]);
+        return CraftingInput.of(width, height, grid);
+    }
+
+    /** Spends one craft's worth out of the dedicated slots. */
+    public static void consume(CraftingRecipe recipe, CrafterBlockEntity crafter) {
+        List<Requirement> requirements = requirements(recipe);
+        for (int i = 0; i < requirements.size(); i++) {
+            crafter.getItem(i).shrink(requirements.get(i).count());
+        }
+    }
+
+    private static Requirement findRequirement(List<Requirement> requirements, Ingredient ingredient) {
+        for (Requirement requirement : requirements) {
+            if (requirement.ingredient().equals(ingredient)) {
+                return requirement;
             }
         }
-        return true;
+        return null;
     }
 }

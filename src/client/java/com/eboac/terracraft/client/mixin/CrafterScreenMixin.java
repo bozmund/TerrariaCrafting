@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.gui.screens.inventory.CrafterScreen;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.inventory.CrafterMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -38,6 +39,12 @@ public abstract class CrafterScreenMixin extends AbstractContainerScreen<Crafter
     /** Panel grey at low alpha, laid over a ghost item to wash it out. */
     private static final int GHOST_WASH = 0xB0C6C6C6;
 
+    /** Slots the current target has no use for. */
+    private static final int UNUSED_WASH = 0x90404040;
+
+    private static final int TEXT_HAVE = 0xFF6FCF6F;
+    private static final int TEXT_SHORT = 0xFFFF7F7F;
+
     private CrafterScreenMixin() {
         super(null, null, null);
     }
@@ -68,15 +75,27 @@ public abstract class CrafterScreenMixin extends AbstractContainerScreen<Crafter
         for (int i = 0; i < GRID_SLOTS; i++) {
             ItemStack wanted = needs.get(i);
             Slot slot = this.menu.slots.get(i);
-            if (wanted.isEmpty() || !slot.getItem().isEmpty()) {
-                continue;
-            }
 
             // Slot coordinates are panel-local; this method draws in screen space.
             int x = this.leftPos + slot.x;
             int y = this.topPos + slot.y;
-            graphics.item(wanted, x, y);
-            graphics.fill(x, y, x + 16, y + 16, GHOST_WASH);
+
+            if (wanted.isEmpty()) {
+                // This slot belongs to no ingredient of the target, so grey it out as unusable.
+                graphics.fill(x, y, x + 16, y + 16, UNUSED_WASH);
+                continue;
+            }
+
+            ItemStack held = slot.getItem();
+            if (held.isEmpty()) {
+                graphics.item(wanted, x, y);
+                graphics.fill(x, y, x + 16, y + 16, GHOST_WASH);
+            }
+
+            // How many this slot gives up per craft, so a stack of 64 iron reads as "5 a time".
+            boolean enough = held.getCount() >= wanted.getCount();
+            graphics.text(this.font, Component.literal("x" + wanted.getCount()),
+                    x + 1, y + 10, enough ? TEXT_HAVE : TEXT_SHORT);
         }
     }
 }

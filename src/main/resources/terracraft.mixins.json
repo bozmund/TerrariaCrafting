@@ -5,6 +5,7 @@
 	"mixins": [
 		"AbstractContainerMenuMixin",
 		"CrafterBlockEntityMixin",
+		"CrafterBlockInvoker",
 		"CrafterBlockMixin",
 		"CrafterMenuMixin",
 		"CraftingTableBlockMixin",
