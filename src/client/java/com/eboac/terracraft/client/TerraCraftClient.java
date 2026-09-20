@@ -24,6 +24,13 @@ public class TerraCraftClient implements ClientModInitializer {
 			}
 		});
 
+		ClientPlayNetworking.registerGlobalReceiver(com.eboac.terracraft.net.CrafterNeedsPayload.TYPE,
+				(payload, context) -> {
+					if (context.player().containerMenu instanceof com.eboac.terracraft.crafter.CrafterNeeds needs) {
+						needs.terracraft$setNeeds(payload.needs());
+					}
+				});
+
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
 			// while, not if: a laggy tick can queue several presses and we must drain them all.
 			while (ModKeyMappings.openBrowser.consumeClick()) {

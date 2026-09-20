@@ -92,6 +92,38 @@ public final class CrafterTargeting {
     }
 
     /**
+     * What the recipe wants, as one stack per distinct ingredient with its count set to the
+     * number of grid cells calling for it.
+     */
+    public static List<ItemStack> needs(CraftingRecipe recipe) {
+        PlacementInfo placement = recipe.placementInfo();
+        IntList slotToIngredient = placement.slotsToIngredientIndex();
+        List<Ingredient> ingredients = placement.ingredients();
+
+        int[] cellsPerIngredient = new int[ingredients.size()];
+        for (int i = 0; i < slotToIngredient.size(); i++) {
+            int index = slotToIngredient.getInt(i);
+            if (index != PlacementInfo.EMPTY_SLOT) {
+                cellsPerIngredient[index]++;
+            }
+        }
+
+        List<ItemStack> needs = new ArrayList<>();
+        for (int i = 0; i < ingredients.size(); i++) {
+            if (cellsPerIngredient[i] == 0) {
+                continue;
+            }
+            // A tag ingredient accepts many items; the first stands in for the rest on screen.
+            ingredients.get(i).items().findFirst().ifPresent(holder ->
+                    needs.add(new ItemStack(holder)));
+            if (!needs.isEmpty()) {
+                needs.getLast().setCount(cellsPerIngredient[i]);
+            }
+        }
+        return needs;
+    }
+
+    /**
      * Shuffles the crafter's grid so the items sit where {@code recipe} expects them.
      *
      * <p>Vanilla matches the grid against recipes by shape, so a hopper dropping planks into

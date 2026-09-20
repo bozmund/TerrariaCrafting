@@ -4,5 +4,7 @@
 	"container.terracraft.craft_browser": "Crafting",
 	"gui.terracraft.search": "Search...",
 	"gui.terracraft.nothing": "Nothing to craft here",
-	"gui.terracraft.no_match": "No recipes match your search"
+	"gui.terracraft.no_match": "No recipes match your search",
+	"gui.terracraft.open_browser": "Crafting",
+	"gui.terracraft.crafter_no_target": "Set a target item"
 }

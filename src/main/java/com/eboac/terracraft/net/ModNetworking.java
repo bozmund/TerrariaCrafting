@@ -12,6 +12,7 @@ public class ModNetworking {
         PayloadTypeRegistry.serverboundPlay().register(OpenBrowserPayload.TYPE, OpenBrowserPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(BrowserActionPayload.TYPE, BrowserActionPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(BrowserStatePayload.TYPE, BrowserStatePayload.CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(CrafterNeedsPayload.TYPE, CrafterNeedsPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(OpenBrowserPayload.TYPE, (payload, context) ->
                 openBrowser(context.player()));
