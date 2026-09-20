@@ -20,14 +20,24 @@ import java.util.List;
  * <p>The slots behind it are already hidden by the menu mixin, so this paints over the sunken
  * squares from the GUI texture and draws, for each ingredient, how many the target recipe wants
  * and how many are currently loaded.
+ *
+ * <p>Everything here is in absolute screen coordinates. {@code extractBackground} is not
+ * translated to the panel's origin the way {@code extractLabels} is, so anything drawn at a bare
+ * local coordinate lands in the top-left corner of the window instead of inside the GUI.
  */
 @Mixin(CrafterScreen.class)
 public abstract class CrafterScreenMixin extends AbstractContainerScreen<CrafterMenu> {
 
-    /** Where vanilla's 3x3 grid sat: (26, 17) to (80, 71). */
-    private static final int GRID_X = 26;
-    private static final int GRID_Y = 17;
-    private static final int GRID_SPAN = 54;
+    /** The area vanilla's 3x3 grid and its arrow occupied. */
+    private static final int AREA_X = 25;
+    private static final int AREA_Y = 16;
+    private static final int AREA_WIDTH = 104;
+    private static final int AREA_HEIGHT = 56;
+
+    private static final int COLUMN_WIDTH = 52;
+    private static final int ROW_HEIGHT = 18;
+    private static final int ROWS_PER_COLUMN = 3;
+    private static final int MAX_SHOWN = ROWS_PER_COLUMN * 2;
 
     private static final int TARGET_X = 134;
     private static final int TARGET_Y = 58;
@@ -47,9 +57,9 @@ public abstract class CrafterScreenMixin extends AbstractContainerScreen<Crafter
         int originX = this.leftPos;
         int originY = this.topPos;
 
-        // Cover the retired grid squares, which come from the crafter's own GUI texture.
-        graphics.fill(originX + GRID_X - 1, originY + GRID_Y - 1,
-                originX + GRID_X + GRID_SPAN + 1, originY + GRID_Y + GRID_SPAN + 1, PANEL);
+        // Cover the retired grid squares and the arrow, which come from the crafter's GUI texture.
+        graphics.fill(originX + AREA_X, originY + AREA_Y,
+                originX + AREA_X + AREA_WIDTH, originY + AREA_Y + AREA_HEIGHT, PANEL);
 
         // The target slot we added has no square of its own either.
         int slotX = originX + TARGET_X - 1;
@@ -62,20 +72,21 @@ public abstract class CrafterScreenMixin extends AbstractContainerScreen<Crafter
 
         if (needs.isEmpty()) {
             graphics.text(this.font, Component.translatable("gui.terracraft.crafter_no_target"),
-                    GRID_X, GRID_Y + 20, TEXT_IDLE);
+                    originX + AREA_X + 2, originY + AREA_Y + 24, TEXT_IDLE);
             return;
         }
 
-        for (int i = 0; i < needs.size() && i < 3; i++) {
+        for (int i = 0; i < needs.size() && i < MAX_SHOWN; i++) {
             ItemStack need = needs.get(i);
-            int rowY = GRID_Y + i * 18;
+            int x = originX + AREA_X + 1 + (i / ROWS_PER_COLUMN) * COLUMN_WIDTH;
+            int y = originY + AREA_Y + 1 + (i % ROWS_PER_COLUMN) * ROW_HEIGHT;
 
-            graphics.item(need, originX + GRID_X, originY + rowY);
+            graphics.item(need, x, y);
 
             int loaded = terracraft$countLoaded(need);
             int wanted = need.getCount();
-            graphics.text(this.font, Component.literal(loaded + " / " + wanted),
-                    GRID_X + 20, rowY + 5, loaded >= wanted ? TEXT_HAVE : TEXT_SHORT);
+            graphics.text(this.font, Component.literal(loaded + "/" + wanted),
+                    x + 19, y + 5, loaded >= wanted ? TEXT_HAVE : TEXT_SHORT);
         }
     }
 
