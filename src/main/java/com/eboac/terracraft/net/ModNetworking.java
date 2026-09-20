@@ -13,9 +13,17 @@ public class ModNetworking {
         PayloadTypeRegistry.serverboundPlay().register(BrowserActionPayload.TYPE, BrowserActionPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(BrowserStatePayload.TYPE, BrowserStatePayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(CrafterNeedsPayload.TYPE, CrafterNeedsPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(RequestCrafterNeedsPayload.TYPE, RequestCrafterNeedsPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(OpenBrowserPayload.TYPE, (payload, context) ->
                 openBrowser(context.player()));
+
+        ServerPlayNetworking.registerGlobalReceiver(RequestCrafterNeedsPayload.TYPE, (payload, context) -> {
+            if (context.player().containerMenu instanceof com.eboac.terracraft.crafter.CrafterNeeds needs) {
+                needs.terracraft$resetNeedsSync();
+                needs.terracraft$pushNeeds();
+            }
+        });
 
         ServerPlayNetworking.registerGlobalReceiver(BrowserActionPayload.TYPE, (payload, context) -> {
             // Only act if the player really has our browser open. A client could send this at any

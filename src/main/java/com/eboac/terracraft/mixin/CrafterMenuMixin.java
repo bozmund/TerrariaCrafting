@@ -4,7 +4,6 @@ import com.eboac.terracraft.crafter.CrafterNeeds;
 import com.eboac.terracraft.crafter.CrafterTargeting;
 import com.eboac.terracraft.crafter.TargetedCrafter;
 import com.eboac.terracraft.net.CrafterNeedsPayload;
-import com.eboac.terracraft.util.HiddenSlots;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
@@ -71,6 +70,11 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
         return this.terracraft$needs;
     }
 
+    @Override
+    public void terracraft$resetNeedsSync() {
+        this.terracraft$lastTarget = ItemStack.EMPTY;
+    }
+
     @Inject(method = "addSlots", at = @At("TAIL"))
     private void terracraft$addTargetSlot(Inventory inventory, CallbackInfo ci) {
         if (this.slots.size() != VANILLA_SLOT_COUNT) {
@@ -78,10 +82,6 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
         }
 
         Container backing = ((CrafterMenu) (Object) this).getContainer();
-
-        // The 3x3 grid is replaced on screen by a list of what the target needs, so its slots are
-        // retired rather than renumbered -- renumbering would desync the client.
-        HiddenSlots.hide(backing);
 
         Container targetSlot = backing instanceof TargetedCrafter targeted
                 ? targeted.terracraft$targetContainer()

@@ -79,7 +79,8 @@ public final class RecipeScanner {
                                   Level level,
                                   IngredientPool pool,
                                   boolean includeUnobtainable,
-                                  String search) {
+                                  String search,
+                                  ItemStack ingredientFilter) {
 
         String query = search.trim().toLowerCase(Locale.ROOT);
 
@@ -100,6 +101,9 @@ public final class RecipeScanner {
             // Terraria-style station rule: without a crafting table nearby you are limited to
             // what fits in the 2x2 grid you always carry with you.
             if (!pool.hasCraftingTableNearby() && !fitsInHandGrid(recipe)) {
+                continue;
+            }
+            if (!ingredientFilter.isEmpty() && !usesIngredient(recipe, ingredientFilter)) {
                 continue;
             }
 
@@ -141,6 +145,16 @@ public final class RecipeScanner {
                 .thenComparing(entry -> entry.result().getHoverName().getString()));
 
         return new ScanResult(entries, byOutput, results);
+    }
+
+    /** True if this recipe consumes the given item, so "what can I make from this?" can be asked. */
+    private static boolean usesIngredient(CraftingRecipe recipe, ItemStack stack) {
+        for (Ingredient ingredient : recipe.placementInfo().ingredients()) {
+            if (ingredient.test(stack)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** True if the recipe would fit in the player's 2x2 inventory grid. */

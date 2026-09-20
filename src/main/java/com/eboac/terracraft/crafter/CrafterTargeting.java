@@ -100,22 +100,35 @@ public final class CrafterTargeting {
         IntList slotToIngredient = placement.slotsToIngredientIndex();
         List<Ingredient> ingredients = placement.ingredients();
 
-        // ingredients() is one entry per grid cell, not one per distinct item, so five iron
-        // ingots arrive as five separate entries. Group them by the item shown for each.
-        java.util.Map<net.minecraft.world.item.Item, Integer> counts = new java.util.LinkedHashMap<>();
+        int width = GRID;
+        if (recipe instanceof ShapedRecipe shaped) {
+            width = shaped.getWidth();
+        }
+
+        List<ItemStack> cells = new ArrayList<>(SLOTS);
+        for (int i = 0; i < SLOTS; i++) {
+            cells.add(ItemStack.EMPTY);
+        }
+
+        // Laid out exactly where arrange() will put things, so the ghosts the player sees are
+        // the cells that will actually be filled.
         for (int cell = 0; cell < slotToIngredient.size(); cell++) {
             int index = slotToIngredient.getInt(cell);
             if (index == PlacementInfo.EMPTY_SLOT) {
                 continue;
             }
+            int row = cell / width;
+            int column = cell % width;
+            if (row >= GRID || column >= GRID) {
+                continue;
+            }
+            int destination = row * GRID + column;
             // A tag ingredient accepts many items; the first stands in for the rest on screen.
+            int finalDestination = destination;
             ingredients.get(index).items().findFirst()
-                    .ifPresent(holder -> counts.merge(holder.value(), 1, Integer::sum));
+                    .ifPresent(holder -> cells.set(finalDestination, new ItemStack(holder)));
         }
-
-        List<ItemStack> needs = new ArrayList<>();
-        counts.forEach((item, count) -> needs.add(new ItemStack(item, count)));
-        return needs;
+        return cells;
     }
 
     /**

@@ -38,6 +38,9 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     private static final int SCROLLBAR_HEIGHT = CraftBrowserMenu.VISIBLE_ROWS * SLOT;
     private static final int HANDLE_HEIGHT = 15;
 
+    private static final int FILTER_X = CraftBrowserMenu.FILTER_X;
+    private static final int FILTER_Y = CraftBrowserMenu.FILTER_Y;
+
     private static final int TOGGLE_X = 174;
     private static final int TOGGLE_Y = 14;
     private static final int TOGGLE_SIZE = 12;
@@ -65,7 +68,7 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     @Override
     protected void init() {
         super.init();
-        searchBox = new EditBox(this.font, this.leftPos + 8, this.topPos + 16, 160, 12,
+        searchBox = new EditBox(this.font, this.leftPos + 8, this.topPos + 16, 132, 12,
                 Component.translatable("gui.terracraft.search"));
         searchBox.setMaxLength(50);
         searchBox.setBordered(false);
@@ -209,7 +212,10 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
         panel(graphics, x, y, WIDTH, HEIGHT);
 
         // search field well
-        sunken(graphics, x + 6, y + 14, 164, 16);
+        sunken(graphics, x + 6, y + 14, 136, 16);
+
+        // ingredient filter slot: drop an item here to see what it can make
+        slot(graphics, x + FILTER_X, y + FILTER_Y);
 
         // recipe grid
         for (int row = 0; row < CraftBrowserMenu.VISIBLE_ROWS; row++) {

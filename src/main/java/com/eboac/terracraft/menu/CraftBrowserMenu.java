@@ -15,6 +15,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
@@ -42,10 +43,22 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     /** Button id sent by the client when the "hide uncraftable" toggle is clicked. */
     public static final int BUTTON_TOGGLE_FILTER = 0;
 
+    /** Menu index of the ingredient filter slot: after the display cells and the inventory. */
+    public static final int FILTER_SLOT = DISPLAY_SLOTS + 36;
+
+    public static final int FILTER_X = 150;
+    public static final int FILTER_Y = 13;
+
     private final Player player;
 
     /** Backing store for the 45 display cells. Server writes it; client receives it. */
     private final SimpleContainer display = new SimpleContainer(DISPLAY_SLOTS);
+
+    /**
+     * Drop an item here to see only the recipes that consume it. Never consumed itself, and
+     * handed back when the screen closes.
+     */
+    private final SimpleContainer ingredientFilter = new SimpleContainer(1);
 
     /**
      * Upper bound on one shift-click. Without it, a chest wall of logs would run thousands of
@@ -80,6 +93,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         addStandardInventorySlots(playerInventory, 8, 140);
+        addSlot(new Slot(ingredientFilter, 0, FILTER_X, FILTER_Y));
 
         if (!player.level().isClientSide()) {
             rebuild();
@@ -105,7 +119,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         long startedAt = System.nanoTime();
         pool = IngredientPool.gather(serverPlayer);
         scan = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
-                pool, showUncraftable, search);
+                pool, showUncraftable, search, ingredientFilter.getItem(0));
         entries = scan.entries();
         com.eboac.terracraft.TerraCraft.LOGGER.debug(
                 "browser rebuild: {} entries from {} item stacks, table={}, search='{}', showUncraftable={}, {} ms",
@@ -207,6 +221,13 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
 
     @Override
     public void clicked(int slotId, int button, ContainerInput input, Player clickingPlayer) {
+        if (slotId == FILTER_SLOT) {
+            super.clicked(slotId, button, input, clickingPlayer);
+            // The filter decides which recipes belong in the list at all, so this needs a rescan.
+            rebuild();
+            return;
+        }
+
         if (slotId >= 0 && slotId < DISPLAY_SLOTS) {
             if (clickingPlayer instanceof ServerPlayer serverPlayer) {
                 boolean shift = input == ContainerInput.QUICK_MOVE;
@@ -361,6 +382,20 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     @Override
     public boolean stillValid(Player validatingPlayer) {
         return validatingPlayer.isAlive();
+    }
+
+    @Override
+    public void removed(Player removingPlayer) {
+        super.removed(removingPlayer);
+        // The filter item is the player's, not ours -- never swallow it on close.
+        ItemStack held = ingredientFilter.removeItemNoUpdate(0);
+        if (!held.isEmpty() && removingPlayer instanceof ServerPlayer serverPlayer) {
+            giveToPlayer(serverPlayer, held);
+        }
+    }
+
+    public ItemStack ingredientFilter() {
+        return ingredientFilter.getItem(0);
     }
 
     // ------------------------------------------------------------------
