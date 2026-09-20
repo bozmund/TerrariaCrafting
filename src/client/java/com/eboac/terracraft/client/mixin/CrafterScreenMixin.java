@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class CrafterScreenMixin extends AbstractContainerScreen<CrafterMenu> {
 
     private static final int SLOT_X = 134;
-    private static final int SLOT_Y = 35;
+    private static final int SLOT_Y = 58;
 
     private CrafterScreenMixin() {
         super(null, null, null);
