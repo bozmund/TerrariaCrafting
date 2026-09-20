@@ -102,8 +102,8 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
      * <p>Recipes only exist on the server, so the screen cannot work this out for itself. Sending
      * on change rather than every tick keeps this to one packet per retarget.
      */
-    @Inject(method = "broadcastChanges", at = @At("TAIL"))
-    private void terracraft$pushNeeds(CallbackInfo ci) {
+    @Override
+    public void terracraft$pushNeeds() {
         if (!(this.player instanceof ServerPlayer serverPlayer)) {
             return;
         }

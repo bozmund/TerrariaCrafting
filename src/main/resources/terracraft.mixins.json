@@ -3,6 +3,7 @@
 	"package": "com.eboac.terracraft.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
+		"AbstractContainerMenuMixin",
 		"CrafterBlockEntityMixin",
 		"CrafterBlockMixin",
 		"CrafterMenuMixin",
