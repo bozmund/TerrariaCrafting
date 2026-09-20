@@ -25,7 +25,7 @@ public class CraftingTableBlockMixin {
 
     @Inject(method = "useWithoutItem", at = @At("HEAD"), cancellable = true)
     private void terracraft$openBrowser(BlockState state, Level level, BlockPos pos, Player player,
-                                        BlockHitResult hit, CallbackInfoReturnable<InteractionResult> cir) {
+                                        BlockHitResult hitResult, CallbackInfoReturnable<InteractionResult> cir) {
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
             ModNetworking.openBrowser(serverPlayer);
         }

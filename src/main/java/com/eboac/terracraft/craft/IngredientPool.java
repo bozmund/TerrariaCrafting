@@ -1,6 +1,7 @@
 package com.eboac.terracraft.craft;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
@@ -10,24 +11,37 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.CraftingTableBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Everything the player can currently craft *from*: their own inventory plus any
- * container block entities within {@link #SCAN_RADIUS} blocks.
+ * Everything the player can currently craft *from*: their own inventory, plus any containers
+ * wired to a nearby crafting table.
  *
- * <p>This is built fresh on the server every time the browser opens or an item is
- * crafted. It is never built on the client -- the client does not know what is in
- * nearby chests, and trusting it to would be a duplication exploit.
+ * <p>Containers are not simply "anything within range". A container counts only if it is part of
+ * a chain of containers touching a crafting table: the table's six neighbours, whatever touches
+ * those, and so on outward. That makes a storage room an explicit build -- chests you want the
+ * table to reach have to physically connect to it -- rather than a radius that quietly swallows
+ * every chest in the basement.
+ *
+ * <p>This is built fresh on the server every time the browser opens or an item is crafted. It is
+ * never built on the client -- the client does not know what is in those chests, and trusting it
+ * to would be a duplication exploit.
  */
 public final class IngredientPool {
 
-    /** How far around the player we look for chests, barrels and other containers. */
+    /** How far around the player we look for a crafting table to act as the station. */
     public static final int SCAN_RADIUS = 8;
 
-    /** Safety cap so a room full of chests cannot make every craft click expensive. */
-    private static final int MAX_CONTAINERS = 48;
+    /** Safety cap so a warehouse of chests cannot make every craft click expensive. */
+    private static final int MAX_CONTAINERS = 64;
+
+    /** How far a container chain may run from its table, so one long line cannot reach a vault. */
+    private static final int MAX_CHAIN_DISTANCE = 16;
 
     /** One slot somewhere that holds items we may consume. */
     public record Source(Container container, int slot) {
@@ -82,40 +96,59 @@ public final class IngredientPool {
     private void findContainers(Player player) {
         Level level = player.level();
         BlockPos origin = player.blockPosition();
-        int found = 0;
 
+        // Step one: locate the crafting tables in range. These are the roots of the chest network
+        // and also what unlocks recipes bigger than the 2x2 hand grid.
+        List<BlockPos> tables = new ArrayList<>();
         for (BlockPos pos : BlockPos.betweenClosed(
                 origin.offset(-SCAN_RADIUS, -SCAN_RADIUS, -SCAN_RADIUS),
                 origin.offset(SCAN_RADIUS, SCAN_RADIUS, SCAN_RADIUS))) {
 
-            // betweenClosed reuses a mutable position, so anything we keep must be copied.
-            if (!level.isLoaded(pos)) {
+            if (!level.isLoaded(pos) || !(level.getBlockState(pos).getBlock() instanceof CraftingTableBlock)) {
                 continue;
             }
+            craftingTableNearby = true;
+            // betweenClosed reuses one mutable position, so anything kept must be copied.
+            tables.add(pos.immutable());
+        }
 
-            if (level.getBlockState(pos).getBlock() instanceof CraftingTableBlock) {
-                craftingTableNearby = true;
-            }
+        if (tables.isEmpty()) {
+            return;
+        }
 
+        // Step two: flood outwards from the tables through touching containers. A chest beside the
+        // table is in; a chest beside that chest is in; a chest across the room on its own is not.
+        Set<BlockPos> visited = new HashSet<>(tables);
+        Deque<BlockPos> queue = new ArrayDeque<>(tables);
 
-            if (found >= MAX_CONTAINERS) {
-                continue;
-            }
+        while (!queue.isEmpty() && containers.size() < MAX_CONTAINERS) {
+            BlockPos current = queue.poll();
 
-            // Cheap early-out: most blocks have no block entity at all, and asking the state is
-            // far cheaper than a block-entity lookup.
-            if (!level.getBlockState(pos).hasBlockEntity()) {
-                continue;
-            }
-            if (!(level.getBlockEntity(pos) instanceof Container container)) {
-                continue;
-            }
-            if (!container.stillValid(player)) {
-                continue;
-            }
+            for (Direction direction : Direction.values()) {
+                BlockPos next = current.relative(direction);
 
-            found++;
-            this.containers.add(container);
+                if (!visited.add(next) || !level.isLoaded(next)) {
+                    continue;
+                }
+                if (tables.stream().noneMatch(table -> table.distManhattan(next) <= MAX_CHAIN_DISTANCE)) {
+                    continue;
+                }
+                // Cheap early-out: most blocks have no block entity, and reading the state is far
+                // cheaper than a block-entity lookup.
+                if (!level.getBlockState(next).hasBlockEntity()) {
+                    continue;
+                }
+                if (!(level.getBlockEntity(next) instanceof Container container)) {
+                    continue;
+                }
+                if (!container.stillValid(player)) {
+                    continue;
+                }
+
+                containers.add(container);
+                // Containers conduct: the chain continues through this one.
+                queue.add(next);
+            }
         }
     }
 
