@@ -1,15 +1,20 @@
 package com.eboac.terracraft.crafter;
 
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.Ingredient;
 
 import java.util.List;
+import java.util.Optional;
 
-/** Implemented by {@code CrafterMenu} through a mixin so the screen can read what it needs. */
+/** Implemented by {@code CrafterMenu} through a mixin so the screen and its slots can read it. */
 public interface CrafterNeeds {
 
-    void terracraft$setNeeds(List<ItemStack> needs);
+    void terracraft$setNeeds(List<Optional<Ingredient>> ingredients, List<Integer> counts);
 
-    List<ItemStack> terracraft$needs();
+    /** One entry per crafter slot; empty where that slot is unused by the current target. */
+    List<Optional<Ingredient>> terracraft$ingredients();
+
+    /** How many that slot gives up per craft, parallel to {@link #terracraft$ingredients()}. */
+    List<Integer> terracraft$counts();
 
     /**
      * Server side: send the current requirements to the viewing player if the target has changed

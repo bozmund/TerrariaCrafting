@@ -27,7 +27,7 @@ public class TerraCraftClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(com.eboac.terracraft.net.CrafterNeedsPayload.TYPE,
 				(payload, context) -> {
 					if (context.player().containerMenu instanceof com.eboac.terracraft.crafter.CrafterNeeds needs) {
-						needs.terracraft$setNeeds(payload.needs());
+						needs.terracraft$setNeeds(payload.ingredients(), payload.counts());
 					}
 				});
 

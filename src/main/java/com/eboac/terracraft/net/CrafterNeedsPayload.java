@@ -5,23 +5,31 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.Ingredient;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
- * Server to client: what a targeted crafter needs before it can run.
+ * Server to client: which ingredient each crafter slot is dedicated to, and how many it spends
+ * per craft. One entry per slot; an empty ingredient means the slot is unused.
  *
- * <p>Each stack is one ingredient with its count set to how many grid cells the recipe wants it
- * in. The client cannot work this out for itself -- recipes live on the server.
+ * <p>The real {@link Ingredient} is sent rather than a representative item so the client can test
+ * a stack exactly the way the server does. Sending only a display item would make the client
+ * refuse birch planks from a slot showing oak, or accept iron into a redstone slot and then have
+ * the server yank it back a frame later.
  */
-public record CrafterNeedsPayload(List<ItemStack> needs) implements CustomPacketPayload {
+public record CrafterNeedsPayload(List<Optional<Ingredient>> ingredients, List<Integer> counts)
+        implements CustomPacketPayload {
 
     public static final Type<CrafterNeedsPayload> TYPE = new Type<>(TerraCraft.id("crafter_needs"));
 
     public static final StreamCodec<RegistryFriendlyByteBuf, CrafterNeedsPayload> CODEC =
             StreamCodec.composite(
-                    ItemStack.OPTIONAL_STREAM_CODEC.apply(ByteBufCodecs.list()), CrafterNeedsPayload::needs,
+                    Ingredient.OPTIONAL_CONTENTS_STREAM_CODEC.apply(ByteBufCodecs.list()),
+                    CrafterNeedsPayload::ingredients,
+                    ByteBufCodecs.VAR_INT.apply(ByteBufCodecs.list()),
+                    CrafterNeedsPayload::counts,
                     CrafterNeedsPayload::new);
 
     @Override

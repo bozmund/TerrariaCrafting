@@ -114,16 +114,6 @@ public final class CrafterTargeting {
         return requirements;
     }
 
-    /** What the client draws: one entry per crafter slot, empty where that slot is unused. */
-    public static List<ItemStack> needs(CraftingRecipe recipe) {
-        List<Requirement> requirements = requirements(recipe);
-        List<ItemStack> cells = new ArrayList<>(SLOTS);
-        for (int i = 0; i < SLOTS; i++) {
-            cells.add(i < requirements.size() ? requirements.get(i).display().copy() : ItemStack.EMPTY);
-        }
-        return cells;
-    }
-
     /**
      * Whether a crafter set to this recipe should accept {@code stack} into {@code slot}.
      *

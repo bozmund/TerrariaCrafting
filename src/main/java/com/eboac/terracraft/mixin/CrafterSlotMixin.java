@@ -49,17 +49,18 @@ public abstract class CrafterSlotMixin extends Slot {
             return;
         }
 
-        // Client: no block entity, only the synced requirement list. Refusing on the display item
-        // would be wrong for tag ingredients -- a slot showing oak planks still accepts birch --
-        // so this only refuses slots the target has no use for at all, and leaves the rest to the
-        // server. A mismatch there flickers once before the server corrects it.
+        // Client: no block entity, but the server sent the real Ingredients, so the same test can
+        // be run here. Matching the server exactly is what stops an item visibly dropping in --
+        // or shift-clicking across -- only to be yanked back a frame later.
         if (!(this.menu instanceof CrafterNeeds holder)) {
             return;
         }
-        List<ItemStack> needs = holder.terracraft$needs();
+        List<java.util.Optional<net.minecraft.world.item.crafting.Ingredient>> ingredients =
+                holder.terracraft$ingredients();
         int slot = this.getContainerSlot();
-        if (slot < needs.size() && needs.get(slot).isEmpty()) {
-            cir.setReturnValue(false);
+        if (slot >= ingredients.size()) {
+            return;
         }
+        cir.setReturnValue(ingredients.get(slot).map(ingredient -> ingredient.test(stack)).orElse(false));
     }
 }

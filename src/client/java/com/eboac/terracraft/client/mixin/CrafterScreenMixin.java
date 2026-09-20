@@ -67,13 +67,23 @@ public abstract class CrafterScreenMixin extends AbstractContainerScreen<Crafter
         graphics.fill(slotX + 1, slotY + 1, slotX + 18, slotY + 18, 0xFFFFFFFF);
         graphics.fill(slotX + 1, slotY + 1, slotX + 17, slotY + 17, 0xFF8B8B8B);
 
-        List<ItemStack> needs = this.menu instanceof CrafterNeeds holder ? holder.terracraft$needs() : List.of();
-        if (needs.size() < GRID_SLOTS) {
+        if (!(this.menu instanceof CrafterNeeds holder)) {
+            return;
+        }
+        List<java.util.Optional<net.minecraft.world.item.crafting.Ingredient>> ingredients =
+                holder.terracraft$ingredients();
+        List<Integer> counts = holder.terracraft$counts();
+        if (ingredients.size() < GRID_SLOTS || counts.size() < GRID_SLOTS) {
             return;
         }
 
         for (int i = 0; i < GRID_SLOTS; i++) {
-            ItemStack wanted = needs.get(i);
+            // A tag ingredient accepts many items; the first stands in for the rest on screen.
+            ItemStack wanted = ingredients.get(i)
+                    .flatMap(ingredient -> ingredient.items().findFirst())
+                    .map(ItemStack::new)
+                    .orElse(ItemStack.EMPTY);
+            int required = counts.get(i);
             Slot slot = this.menu.slots.get(i);
 
             // Slot coordinates are panel-local; this method draws in screen space.
@@ -93,8 +103,8 @@ public abstract class CrafterScreenMixin extends AbstractContainerScreen<Crafter
             }
 
             // How many this slot gives up per craft, so a stack of 64 iron reads as "5 a time".
-            boolean enough = held.getCount() >= wanted.getCount();
-            graphics.text(this.font, Component.literal("x" + wanted.getCount()),
+            boolean enough = held.getCount() >= required;
+            graphics.text(this.font, Component.literal("x" + required),
                     x + 1, y + 10, enough ? TEXT_HAVE : TEXT_SHORT);
         }
     }

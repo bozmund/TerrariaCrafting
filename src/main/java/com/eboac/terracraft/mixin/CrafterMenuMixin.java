@@ -51,7 +51,10 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
     private Player player;
 
     @Unique
-    private List<ItemStack> terracraft$needs = List.of();
+    private List<java.util.Optional<net.minecraft.world.item.crafting.Ingredient>> terracraft$ingredients = List.of();
+
+    @Unique
+    private List<Integer> terracraft$counts = List.of();
 
     @Unique
     private ItemStack terracraft$lastTarget = ItemStack.EMPTY;
@@ -61,13 +64,20 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
     }
 
     @Override
-    public void terracraft$setNeeds(List<ItemStack> needs) {
-        this.terracraft$needs = needs;
+    public void terracraft$setNeeds(List<java.util.Optional<net.minecraft.world.item.crafting.Ingredient>> ingredients,
+                                    List<Integer> counts) {
+        this.terracraft$ingredients = ingredients;
+        this.terracraft$counts = counts;
     }
 
     @Override
-    public List<ItemStack> terracraft$needs() {
-        return this.terracraft$needs;
+    public List<java.util.Optional<net.minecraft.world.item.crafting.Ingredient>> terracraft$ingredients() {
+        return this.terracraft$ingredients;
+    }
+
+    @Override
+    public List<Integer> terracraft$counts() {
+        return this.terracraft$counts;
     }
 
     @Override
@@ -123,8 +133,18 @@ public abstract class CrafterMenuMixin extends AbstractContainerMenu implements 
         net.minecraft.world.item.crafting.RecipeHolder<CraftingRecipe> holder = CrafterTargeting.recipeFor(
                 blockEntity.getLevel().getServer(), blockEntity.getLevel(), target);
 
-        ServerPlayNetworking.send(serverPlayer,
-                new CrafterNeedsPayload(holder == null ? List.of() : CrafterTargeting.needs(holder.value())));
+        List<java.util.Optional<net.minecraft.world.item.crafting.Ingredient>> ingredients = new java.util.ArrayList<>();
+        List<Integer> counts = new java.util.ArrayList<>();
+        List<CrafterTargeting.Requirement> requirements =
+                holder == null ? List.of() : CrafterTargeting.requirements(holder.value());
+
+        for (int i = 0; i < CrafterTargeting.SLOTS; i++) {
+            boolean used = i < requirements.size();
+            ingredients.add(used ? java.util.Optional.of(requirements.get(i).ingredient()) : java.util.Optional.empty());
+            counts.add(used ? requirements.get(i).count() : 0);
+        }
+
+        ServerPlayNetworking.send(serverPlayer, new CrafterNeedsPayload(ingredients, counts));
     }
 
     /** Vanilla's shift-click logic knows nothing about our slot and would index past its ranges. */
