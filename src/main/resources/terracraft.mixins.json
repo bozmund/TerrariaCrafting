@@ -8,6 +8,7 @@
 		"CrafterBlockInvoker",
 		"CrafterBlockMixin",
 		"CrafterMenuMixin",
+		"CrafterSlotMixin",
 		"CraftingTableBlockMixin",
 		"InventoryMenuMixin",
 		"SlotMixin"
