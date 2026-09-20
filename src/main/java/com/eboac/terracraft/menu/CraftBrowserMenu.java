@@ -107,7 +107,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         scan = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
                 pool, showUncraftable, search);
         entries = scan.entries();
-        com.eboac.terracraft.TerraCraft.LOGGER.info(
+        com.eboac.terracraft.TerraCraft.LOGGER.debug(
                 "browser rebuild: {} entries from {} item stacks, table={}, search='{}', showUncraftable={}, {} ms",
                 entries.size(), pool.sourceCount(), pool.hasCraftingTableNearby(), search, showUncraftable,
                 (System.nanoTime() - startedAt) / 1_000_000L);
