@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
@@ -48,6 +49,7 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     private static final int COLOUR_SLOT = 0xFF8B8B8B;
     private static final int COLOUR_SLOT_EDGE = 0xFF373737;
     private static final int COLOUR_UNCRAFTABLE = 0xA0101010;
+    private static final int COLOUR_CHAINED = 0xFF5FD068;
     private static final int COLOUR_TOGGLE_ON = 0xFF4CAF50;
     private static final int COLOUR_TOGGLE_OFF = 0xFF7A7A7A;
 
@@ -67,11 +69,22 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
                 Component.translatable("gui.terracraft.search"));
         searchBox.setMaxLength(50);
         searchBox.setBordered(false);
-        searchBox.setTextColor(0x404040);
+        // Colours here are ARGB. 0x404040 has an alpha of zero, which draws perfectly
+        // transparent text -- the typing works, you just cannot see any of it.
+        searchBox.setTextColor(0xFF404040);
+        searchBox.setTextColorUneditable(0xFF707070);
+        searchBox.setHint(Component.translatable("gui.terracraft.search")
+                .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
         searchBox.setValue(this.menu.search());
         searchBox.setResponder(text -> sendState(this.menu.scrollRow()));
         addRenderableWidget(searchBox);
         setInitialFocus(searchBox);
+
+        // The server builds the list while constructing the menu, which happens before the client
+        // has been told to open this screen -- so that first state packet arrives with no menu to
+        // apply it to and is dropped. Asking again now that the screen exists is what makes the
+        // list appear at all.
+        sendState(this.menu.scrollRow());
     }
 
     // ------------------------------------------------------------------
@@ -158,9 +171,11 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        // Let the search box swallow typing, but keep Escape closing the screen.
-        if (searchBox != null && searchBox.isFocused() && event.key() != 256) {
-            return searchBox.keyPressed(event) || super.keyPressed(event);
+        if (searchBox != null && searchBox.isFocused() && event.key() != InputConstants.KEY_ESCAPE) {
+            searchBox.keyPressed(event);
+            // Consume everything except Escape. Falling through to super would let vanilla treat
+            // a typed "e" as the close-inventory key and the digits as hotbar swaps.
+            return true;
         }
         return super.keyPressed(event);
     }
@@ -260,21 +275,30 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     protected void extractSlot(GuiGraphicsExtractor graphics, Slot slot, int mouseX, int mouseY) {
         super.extractSlot(graphics, slot, mouseX, mouseY);
 
-        // Dim recipe cells the player cannot currently afford, the way the recipe book does.
         int index = this.menu.slots.indexOf(slot);
-        if (index >= 0 && index < CraftBrowserMenu.DISPLAY_SLOTS
-                && !slot.getItem().isEmpty()
-                && !this.menu.isDisplaySlotCraftable(index)) {
+        if (index < 0 || index >= CraftBrowserMenu.DISPLAY_SLOTS || slot.getItem().isEmpty()) {
+            return;
+        }
+
+        if (!this.menu.isDisplaySlotObtainable(index)) {
+            // Out of reach entirely -- dim it, the way the recipe book does.
             graphics.fill(slot.x, slot.y, slot.x + 16, slot.y + 16, COLOUR_UNCRAFTABLE);
+        } else if (this.menu.isDisplaySlotChained(index)) {
+            // Reachable, but only by crafting the parts first. Drawn at full brightness with a
+            // small corner mark, so "I can get this" reads instantly and "it costs extra steps"
+            // is there if you look.
+            graphics.fill(slot.x, slot.y, slot.x + 3, slot.y + 1, COLOUR_CHAINED);
+            graphics.fill(slot.x, slot.y, slot.x + 1, slot.y + 3, COLOUR_CHAINED);
         }
     }
 
     @Override
     protected void extractLabels(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
         super.extractLabels(graphics, mouseX, mouseY);
-        if (this.menu.totalEntries() == 0) {
+        if (this.menu.totalEntries() == 0 && this.menu.slots.getFirst().getItem().isEmpty()) {
+            boolean filtering = searchBox != null && !searchBox.getValue().isEmpty();
             graphics.text(this.font,
-                    Component.translatable("gui.terracraft.nothing"),
+                    Component.translatable(filtering ? "gui.terracraft.no_match" : "gui.terracraft.nothing"),
                     GRID_X + 4, GRID_Y + 36, 0xFF808080);
         }
     }

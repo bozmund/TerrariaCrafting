@@ -2,6 +2,7 @@ package com.eboac.terracraft.menu;
 
 import com.eboac.terracraft.craft.CraftAttempt;
 import com.eboac.terracraft.craft.CraftEntry;
+import com.eboac.terracraft.craft.CraftingPlanner;
 import com.eboac.terracraft.craft.IngredientPool;
 import com.eboac.terracraft.craft.RecipeScanner;
 import com.eboac.terracraft.net.BrowserStatePayload;
@@ -16,7 +17,9 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.RecipeHolder;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -44,16 +47,26 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     /** Backing store for the 45 display cells. Server writes it; client receives it. */
     private final SimpleContainer display = new SimpleContainer(DISPLAY_SLOTS);
 
+    /**
+     * Upper bound on one shift-click. Without it, a chest wall of logs would run thousands of
+     * crafts inside a single packet handler and stall the server tick.
+     */
+    private static final int MAX_BULK_CRAFTS = 256;
+
     // ---- server-side state ----
     private List<CraftEntry> entries = List.of();
+    private RecipeScanner.ScanResult scan;
     private IngredientPool pool;
 
     // ---- shared state (client mirrors it via BrowserStatePayload) ----
     private int scrollRow;
-    private boolean showUncraftable = true;
+    private boolean showUncraftable = false;
     private String search = "";
     private int totalEntries;
+    /** Visible cells that can be made right now. */
     private long craftableMask;
+    /** Visible cells reachable only by running intermediate crafts first. */
+    private long chainMask;
 
     public CraftBrowserMenu(int containerId, Inventory playerInventory) {
         super(ModMenus.CRAFT_BROWSER, containerId);
@@ -69,7 +82,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         addStandardInventorySlots(playerInventory, 8, 140);
 
         if (!player.level().isClientSide()) {
-            refresh();
+            rebuild();
         }
     }
 
@@ -77,29 +90,78 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     // Server-side recomputation
     // ------------------------------------------------------------------
 
-    /** Rebuilds the ingredient pool, rescans recipes, and pushes the result to the client. */
-    public void refresh() {
+    /**
+     * Full rescan: rebuilds the recipe list and its order from scratch.
+     *
+     * <p>Deliberately NOT called after crafting. Re-sorting mid-session would slide every icon to
+     * a new position under the player's cursor, which makes crafting several of something a game
+     * of hunt-the-icon. The list is settled when the screen opens and stays put until it closes.
+     */
+    public void rebuild() {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return;
         }
 
+        long startedAt = System.nanoTime();
         pool = IngredientPool.gather(serverPlayer);
-        entries = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
+        scan = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
                 pool, showUncraftable, search);
-        totalEntries = entries.size();
+        entries = scan.entries();
+        com.eboac.terracraft.TerraCraft.LOGGER.info(
+                "browser rebuild: {} entries from {} item stacks, table={}, search='{}', showUncraftable={}, {} ms",
+                entries.size(), pool.sourceCount(), pool.hasCraftingTableNearby(), search, showUncraftable,
+                (System.nanoTime() - startedAt) / 1_000_000L);
 
+        repaginate();
+    }
+
+    /**
+     * Re-checks what is still affordable without touching the list or its order.
+     *
+     * <p>This is what runs after a craft. Entries keep their slots; ones the player can no longer
+     * afford simply stop being marked craftable and grey out where they are.
+     */
+    public void revalidate() {
+        if (!(player instanceof ServerPlayer serverPlayer) || scan == null) {
+            return;
+        }
+
+        pool = IngredientPool.gather(serverPlayer);
+        CraftingPlanner planner = new CraftingPlanner(pool, scan.byOutput(), scan.results());
+
+        List<CraftEntry> updated = new ArrayList<>(entries.size());
+        for (CraftEntry entry : entries) {
+            updated.add(new CraftEntry(entry.holder(), entry.result(),
+                    planner.plan(entry.holder().value())));
+        }
+        entries = updated;
+
+        repaginate();
+    }
+
+    /** Refills the visible page from the current list and tells the client about it. */
+    public void repaginate() {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return;
+        }
+
+        totalEntries = entries.size();
         int maxRow = Math.max(0, (totalEntries + COLUMNS - 1) / COLUMNS - VISIBLE_ROWS);
         scrollRow = Math.clamp(scrollRow, 0, maxRow);
 
         craftableMask = 0L;
+        chainMask = 0L;
         int first = scrollRow * COLUMNS;
         for (int i = 0; i < DISPLAY_SLOTS; i++) {
             int index = first + i;
             if (index < entries.size()) {
                 CraftEntry entry = entries.get(index);
                 display.setItem(i, entry.result().copy());
-                if (entry.craftable()) {
-                    craftableMask |= 1L << i;
+                switch (entry.tier()) {
+                    case 0 -> craftableMask |= 1L << i;
+                    case 1 -> chainMask |= 1L << i;
+                    default -> {
+                    }
                 }
             } else {
                 display.setItem(i, ItemStack.EMPTY);
@@ -107,23 +169,33 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         broadcastChanges();
-        ServerPlayNetworking.send(serverPlayer,
-                new BrowserStatePayload(totalEntries, scrollRow, showUncraftable, craftableMask));
+        ServerPlayNetworking.send(serverPlayer, new BrowserStatePayload(
+                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask));
     }
 
     /** Applies the display controls the client asked for. None of these affect game state. */
     public void applyClientState(int requestedRow, boolean requestedShowUncraftable, String requestedSearch) {
+        String trimmed = requestedSearch.length() > 50 ? requestedSearch.substring(0, 50) : requestedSearch;
+        // Changing the filter or the search changes which recipes belong in the list at all, so
+        // those need a rescan. Scrolling only moves a window over a list we already have.
+        boolean listChanged = requestedShowUncraftable != showUncraftable || !trimmed.equals(search);
+
         this.scrollRow = Math.max(0, requestedRow);
         this.showUncraftable = requestedShowUncraftable;
-        this.search = requestedSearch.length() > 50 ? requestedSearch.substring(0, 50) : requestedSearch;
-        refresh();
+        this.search = trimmed;
+
+        if (listChanged || scan == null) {
+            rebuild();
+        } else {
+            repaginate();
+        }
     }
 
     @Override
     public boolean clickMenuButton(Player clickingPlayer, int id) {
         if (id == BUTTON_TOGGLE_FILTER) {
             showUncraftable = !showUncraftable;
-            refresh();
+            rebuild();
             return true;
         }
         return false;
@@ -137,7 +209,12 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     public void clicked(int slotId, int button, ContainerInput input, Player clickingPlayer) {
         if (slotId >= 0 && slotId < DISPLAY_SLOTS) {
             if (clickingPlayer instanceof ServerPlayer serverPlayer) {
-                craft(serverPlayer, slotId, input == ContainerInput.QUICK_MOVE);
+                boolean shift = input == ContainerInput.QUICK_MOVE;
+                boolean rightButton = button == 1;
+                // shift+right: make as many as the materials allow.
+                // shift+left: exactly one, into the inventory, so repeated clicks count out.
+                // plain click: exactly one, onto the cursor.
+                craft(serverPlayer, slotId, shift, shift && rightButton);
             }
             return;
         }
@@ -145,41 +222,99 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     }
 
     /**
-     * @param toInventory true for shift-click (straight to the inventory), false for a normal
-     *                    click (onto the cursor, the way Terraria hands you the item)
+     * @param toInventory where the result goes: true for the inventory, false for the cursor
+     * @param bulk        true to repeat until the materials run out
      */
-    private void craft(ServerPlayer serverPlayer, int displaySlot, boolean toInventory) {
+    private void craft(ServerPlayer serverPlayer, int displaySlot, boolean toInventory, boolean bulk) {
         int index = scrollRow * COLUMNS + displaySlot;
         if (index < 0 || index >= entries.size()) {
             return;
         }
+        if (!entries.get(index).obtainable()) {
+            return;
+        }
 
         CraftEntry entry = entries.get(index);
-        CraftingRecipe recipe = entry.holder().value();
 
-        // Never trust the cached craftable flag -- the pool is rebuilt and re-checked here, so a
-        // client spamming clicks faster than the UI updates still cannot craft what it cannot pay for.
+        // Never trust the flags the client was last told -- everything is recomputed from the
+        // live world here, so clicking faster than the UI updates cannot produce a free item.
         pool = IngredientPool.gather(serverPlayer);
+
+        int made = 0;
+        while (true) {
+            pool.reread();
+
+            // Re-plan every round. After the first craft the pool has changed, so the chain that
+            // was valid a moment ago may be shorter, longer, or unnecessary.
+            List<RecipeHolder<CraftingRecipe>> steps =
+                    new CraftingPlanner(pool, scan.byOutput(), scan.results()).plan(entry.holder().value());
+            if (steps == null) {
+                break;
+            }
+
+            boolean prerequisitesOk = true;
+            for (RecipeHolder<CraftingRecipe> step : steps) {
+                if (!runOnce(serverPlayer, step, true)) {
+                    prerequisitesOk = false;
+                    break;
+                }
+            }
+            if (!prerequisitesOk) {
+                break;
+            }
+
+
+            if (!runOnce(serverPlayer, entry.holder(), toInventory)) {
+                break;
+            }
+            made++;
+
+            if (!bulk || made >= MAX_BULK_CRAFTS || !hasRoomFor(serverPlayer, entry.result())) {
+                break;
+            }
+        }
+
+        // Re-check affordability only. Rebuilding here would re-sort the grid under the cursor.
+        revalidate();
+    }
+
+    /**
+     * Whether the inventory can take another batch without items ending up on the floor. Bulk
+     * crafting stops here rather than spraying the result around the player's feet.
+     */
+    private boolean hasRoomFor(ServerPlayer serverPlayer, ItemStack result) {
+        Inventory inventory = serverPlayer.getInventory();
+        return inventory.getFreeSlot() != -1 || inventory.getSlotWithRemainingSpace(result) != -1;
+    }
+
+    /**
+     * Performs exactly one craft of one recipe against the current pool.
+     *
+     * @param toInventory where the result goes; false means the cursor
+     * @return false if the recipe turned out not to be makeable after all
+     */
+    private boolean runOnce(ServerPlayer serverPlayer, RecipeHolder<CraftingRecipe> holder, boolean toInventory) {
+        CraftingRecipe recipe = holder.value();
+        pool.reread();
+
         CraftAttempt attempt = RecipeScanner.attempt(recipe, pool);
         if (attempt == null || !recipe.matches(attempt.input(), serverPlayer.level())) {
-            refresh();
-            return;
+            return false;
         }
 
         ItemStack result = recipe.assemble(attempt.input());
         if (result.isEmpty()) {
-            refresh();
-            return;
+            return false;
         }
 
         ItemStack carried = getCarried();
         if (!toInventory) {
             // Cursor route: only legal if the cursor is empty or already holds the same thing
-            // with room to spare. Otherwise the player would silently lose what they were holding.
+            // with room to spare. Otherwise the player would silently lose what they held.
             if (!carried.isEmpty()
                     && (!ItemStack.isSameItemSameComponents(carried, result)
                     || carried.getCount() + result.getCount() > carried.getMaxStackSize())) {
-                return;
+                return false;
             }
         }
 
@@ -193,7 +328,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         result.onCraftedBy(serverPlayer, result.getCount());
-        serverPlayer.awardRecipes(List.<net.minecraft.world.item.crafting.RecipeHolder<?>>of(entry.holder()));
+        serverPlayer.awardRecipes(List.<RecipeHolder<?>>of(holder));
 
         if (toInventory) {
             giveToPlayer(serverPlayer, result);
@@ -203,8 +338,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
             carried.grow(result.getCount());
             setCarried(carried);
         }
-
-        refresh();
+        return true;
     }
 
     private void giveToPlayer(ServerPlayer serverPlayer, ItemStack stack) {
@@ -233,15 +367,24 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     // Client-side accessors, fed by BrowserStatePayload
     // ------------------------------------------------------------------
 
-    public void acceptState(int totalEntries, int scrollRow, boolean showUncraftable, long craftableMask) {
+    public void acceptState(int totalEntries, int scrollRow, boolean showUncraftable,
+                            long craftableMask, long chainMask) {
         this.totalEntries = totalEntries;
         this.scrollRow = scrollRow;
         this.showUncraftable = showUncraftable;
         this.craftableMask = craftableMask;
+        this.chainMask = chainMask;
     }
 
-    public boolean isDisplaySlotCraftable(int displaySlot) {
-        return (craftableMask & (1L << displaySlot)) != 0L;
+    /** True if the player can get this item, directly or by running intermediate crafts. */
+    public boolean isDisplaySlotObtainable(int displaySlot) {
+        long bit = 1L << displaySlot;
+        return (craftableMask & bit) != 0L || (chainMask & bit) != 0L;
+    }
+
+    /** True if getting this item needs intermediate crafts first. */
+    public boolean isDisplaySlotChained(int displaySlot) {
+        return (chainMask & (1L << displaySlot)) != 0L;
     }
 
     public int totalEntries() {

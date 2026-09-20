@@ -35,6 +35,10 @@ public final class IngredientPool {
 
     private final List<Source> sources = new ArrayList<>();
     private final List<ItemStack> stacks = new ArrayList<>();
+
+    /** The containers found by the world scan, kept so {@link #reread} need not scan again. */
+    private final List<Container> containers = new ArrayList<>();
+    private Player owner;
     private boolean craftingTableNearby;
 
     private IngredientPool() {
@@ -42,9 +46,29 @@ public final class IngredientPool {
 
     public static IngredientPool gather(Player player) {
         IngredientPool pool = new IngredientPool();
-        pool.addPlayerInventory(player.getInventory());
-        pool.addNearbyContainers(player);
+        pool.owner = player;
+        pool.findContainers(player);
+        pool.reread();
         return pool;
+    }
+
+    /**
+     * Re-reads every known container's contents without scanning the world again.
+     *
+     * <p>A chained craft runs several recipes back to back, and each one changes what is in the
+     * player's inventory. Repeating the block scan between steps would mean thousands of
+     * {@code getBlockEntity} calls per click; the set of containers has not moved, only their
+     * contents have.
+     */
+    public void reread() {
+        sources.clear();
+        stacks.clear();
+        addPlayerInventory(owner.getInventory());
+        for (Container container : containers) {
+            for (int slot = 0; slot < container.getContainerSize(); slot++) {
+                add(container, slot);
+            }
+        }
     }
 
     private void addPlayerInventory(Inventory inventory) {
@@ -55,10 +79,10 @@ public final class IngredientPool {
         }
     }
 
-    private void addNearbyContainers(Player player) {
+    private void findContainers(Player player) {
         Level level = player.level();
         BlockPos origin = player.blockPosition();
-        int containers = 0;
+        int found = 0;
 
         for (BlockPos pos : BlockPos.betweenClosed(
                 origin.offset(-SCAN_RADIUS, -SCAN_RADIUS, -SCAN_RADIUS),
@@ -73,22 +97,25 @@ public final class IngredientPool {
                 craftingTableNearby = true;
             }
 
-            if (containers >= MAX_CONTAINERS) {
+
+            if (found >= MAX_CONTAINERS) {
                 continue;
             }
 
-            BlockEntity blockEntity = level.getBlockEntity(pos);
-            if (!(blockEntity instanceof Container container)) {
+            // Cheap early-out: most blocks have no block entity at all, and asking the state is
+            // far cheaper than a block-entity lookup.
+            if (!level.getBlockState(pos).hasBlockEntity()) {
+                continue;
+            }
+            if (!(level.getBlockEntity(pos) instanceof Container container)) {
                 continue;
             }
             if (!container.stillValid(player)) {
                 continue;
             }
 
-            containers++;
-            for (int slot = 0; slot < container.getContainerSize(); slot++) {
-                add(container, slot);
-            }
+            found++;
+            this.containers.add(container);
         }
     }
 

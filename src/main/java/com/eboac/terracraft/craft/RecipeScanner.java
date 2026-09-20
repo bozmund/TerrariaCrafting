@@ -2,23 +2,29 @@ package com.eboac.terracraft.craft;
 
 import it.unimi.dsi.fastutil.ints.IntList;
 import net.minecraft.core.Holder;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.CraftingInput;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.PlacementInfo;
+import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.ShapedRecipe;
 import net.minecraft.world.level.Level;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Turns "every crafting recipe in the game" into "the list this player sees right now".
@@ -26,6 +32,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Terraria ignores the *shape* of a recipe -- you never arrange anything in a grid. We keep
  * that feel by reconstructing a valid grid ourselves from the recipe's own placement data, so
  * shaped and shapeless recipes both behave like a flat shopping list of ingredients.
+ *
+ * <p>It also follows Terraria in showing an item as available when the player only has the raw
+ * material for it: one log counts as a crafting table, because the chain log -> planks -> table
+ * can be run for them. {@link CraftingPlanner} does that search.
  *
  * <p>All of this is server-only. {@code RecipeManager} lives on the server, and computing
  * craftability on the client would be trivially cheatable.
@@ -35,11 +45,9 @@ public final class RecipeScanner {
     /**
      * A recipe's result never changes, but working it out means building a grid and assembling.
      * Doing that for ~1500 recipes on every refresh -- and we refresh on every craft -- is the
-     * difference between an instant browser and a visible stutter. Recipes are reloaded on
-     * /reload, so the cache is cleared from {@link #invalidate()}.
+     * difference between an instant browser and a visible stutter.
      */
-    private static final Map<net.minecraft.resources.ResourceKey<net.minecraft.world.item.crafting.Recipe<?>>, ItemStack>
-            PREVIEW_CACHE = new ConcurrentHashMap<>();
+    private static final Map<ResourceKey<Recipe<?>>, ItemStack> PREVIEW_CACHE = new ConcurrentHashMap<>();
 
     private RecipeScanner() {
     }
@@ -49,19 +57,36 @@ public final class RecipeScanner {
     }
 
     /**
+     * The outcome of a scan. The two maps are kept because bulk crafting needs to re-plan after
+     * every single craft -- the pool changes underneath it -- and rebuilding them per craft would
+     * mean walking the whole recipe list again.
+     *
+     * @param byOutput which recipes produce a given item
+     * @param results  each recipe's result stack
+     */
+    public record ScanResult(List<CraftEntry> entries,
+                             Map<Item, List<RecipeHolder<CraftingRecipe>>> byOutput,
+                             Map<RecipeHolder<CraftingRecipe>, ItemStack> results) {
+    }
+
+    /**
      * Builds the full browser list.
      *
-     * @param includeUncraftable when false, recipes the player cannot afford are dropped entirely
-     * @param search             lower-cased substring filter on the result's display name, or blank
+     * @param includeUnobtainable when false, recipes the player cannot reach are dropped entirely
+     * @param search              substring filter on the result's display name, or blank
      */
-    public static List<CraftEntry> scan(MinecraftServer server,
-                                        Level level,
-                                        IngredientPool pool,
-                                        boolean includeUncraftable,
-                                        String search) {
+    public static ScanResult scan(MinecraftServer server,
+                                  Level level,
+                                  IngredientPool pool,
+                                  boolean includeUnobtainable,
+                                  String search) {
 
         String query = search.trim().toLowerCase(Locale.ROOT);
-        List<CraftEntry> entries = new ArrayList<>();
+
+        // Pass one: every recipe we are willing to show at all, with its result.
+        List<RecipeHolder<CraftingRecipe>> usable = new ArrayList<>();
+        Map<RecipeHolder<CraftingRecipe>, ItemStack> results = new HashMap<>();
+        Map<Item, List<RecipeHolder<CraftingRecipe>>> byOutput = new HashMap<>();
 
         for (RecipeHolder<?> holder : server.getRecipeManager().getRecipes()) {
             if (!(holder.value() instanceof CraftingRecipe recipe)) {
@@ -82,29 +107,40 @@ public final class RecipeScanner {
             if (preview.isEmpty()) {
                 continue;
             }
-            if (!query.isEmpty()
-                    && !preview.getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)) {
-                continue;
-            }
-
-            CraftAttempt attempt = attempt(recipe, pool);
-            boolean craftable = attempt != null && recipe.matches(attempt.input(), level);
-
-            if (!craftable && !includeUncraftable) {
-                continue;
-            }
 
             @SuppressWarnings("unchecked")
             RecipeHolder<CraftingRecipe> typed = (RecipeHolder<CraftingRecipe>) holder;
-            entries.add(new CraftEntry(typed, preview, craftable));
+            usable.add(typed);
+            results.put(typed, preview);
+            byOutput.computeIfAbsent(preview.getItem(), item -> new ArrayList<>()).add(typed);
         }
 
-        // Craftable first, then alphabetical, so the useful half of the list is always on top.
-        entries.sort(Comparator
-                .comparing((CraftEntry e) -> !e.craftable())
-                .thenComparing(e -> e.result().getHoverName().getString()));
+        // Pass two: how reachable is each one? The planner needs byOutput built first, which is
+        // why this cannot be folded into the loop above.
+        CraftingPlanner planner = new CraftingPlanner(pool, byOutput, results);
+        List<CraftEntry> entries = new ArrayList<>();
 
-        return entries;
+        for (RecipeHolder<CraftingRecipe> holder : usable) {
+            ItemStack result = results.get(holder);
+
+            if (!query.isEmpty()
+                    && !result.getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)) {
+                continue;
+            }
+
+            List<RecipeHolder<CraftingRecipe>> steps = planner.plan(holder.value());
+            if (steps == null && !includeUnobtainable) {
+                continue;
+            }
+            entries.add(new CraftEntry(holder, result, steps));
+        }
+
+        // Craftable now, then craftable via a chain, then the rest -- alphabetical within each.
+        entries.sort(Comparator
+                .comparingInt(CraftEntry::tier)
+                .thenComparing(entry -> entry.result().getHoverName().getString()));
+
+        return new ScanResult(entries, byOutput, results);
     }
 
     /** True if the recipe would fit in the player's 2x2 inventory grid. */
@@ -123,7 +159,7 @@ public final class RecipeScanner {
     public static ItemStack preview(CraftingRecipe recipe, Level level) {
         CraftAttempt attempt = build(recipe, ingredient -> {
             Optional<Holder<Item>> first = ingredient.items().findFirst();
-            return first.map(holder -> new ItemStack(holder)).orElse(ItemStack.EMPTY);
+            return first.map(ItemStack::new).orElse(ItemStack.EMPTY);
         });
         if (attempt == null || !recipe.matches(attempt.input(), level)) {
             return ItemStack.EMPTY;
@@ -132,7 +168,7 @@ public final class RecipeScanner {
     }
 
     /**
-     * Tries to fill the recipe's grid from the pool.
+     * Tries to fill the recipe's grid from the pool as it stands right now -- no chains.
      *
      * @return an attempt carrying both the grid and what it would consume, or null if the
      *         player cannot cover every ingredient
@@ -153,7 +189,7 @@ public final class RecipeScanner {
             order[i] = i;
             gridSource[i] = -1;
         }
-        java.util.Arrays.sort(order, Comparator.comparingInt(slot -> {
+        Arrays.sort(order, Comparator.comparingInt(slot -> {
             int index = slotToIngredient.getInt(slot);
             return index == PlacementInfo.EMPTY_SLOT
                     ? Integer.MAX_VALUE
@@ -183,11 +219,11 @@ public final class RecipeScanner {
             grid.add(source < 0 ? ItemStack.EMPTY : pool.stackAt(source).copyWithCount(1));
         }
 
-        return new CraftAttempt(net.minecraft.world.item.crafting.CraftingInput.of(width, height, grid), claimed);
+        return new CraftAttempt(CraftingInput.of(width, height, grid), claimed);
     }
 
-    /** Shared grid-filling used by both {@link #preview} and {@link #attempt}. */
-    private static CraftAttempt build(CraftingRecipe recipe, java.util.function.Function<Ingredient, ItemStack> chooser) {
+    /** Shared grid-filling used by {@link #preview}. */
+    private static CraftAttempt build(CraftingRecipe recipe, Function<Ingredient, ItemStack> chooser) {
         PlacementInfo placement = recipe.placementInfo();
         IntList slotToIngredient = placement.slotsToIngredientIndex();
         List<Ingredient> ingredients = placement.ingredients();

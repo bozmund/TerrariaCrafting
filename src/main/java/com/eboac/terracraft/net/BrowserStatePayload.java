@@ -12,7 +12,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * <p>The craftable flags are a bitmask because there are exactly 45 visible cells, which fits
  * in a single long.
  */
-public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showUncraftable, long craftableMask)
+public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showUncraftable,
+                                  long craftableMask, long chainMask)
         implements CustomPacketPayload {
 
     public static final Type<BrowserStatePayload> TYPE = new Type<>(TerraCraft.id("browser_state"));
@@ -23,6 +24,7 @@ public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showU
                     ByteBufCodecs.VAR_INT, BrowserStatePayload::scrollRow,
                     ByteBufCodecs.BOOL, BrowserStatePayload::showUncraftable,
                     ByteBufCodecs.VAR_LONG, BrowserStatePayload::craftableMask,
+                    ByteBufCodecs.VAR_LONG, BrowserStatePayload::chainMask,
                     BrowserStatePayload::new);
 
     @Override
