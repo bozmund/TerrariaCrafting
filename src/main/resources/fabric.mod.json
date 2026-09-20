@@ -1,0 +1,34 @@
+{
+	"schemaVersion": 1,
+	"id": "terracraft",
+	"version": "${version}",
+	"name": "Terraria Crafting",
+	"description": "Replaces grid crafting with a Terraria-style browser of everything you can currently craft.",
+	"authors": [
+		"eboac"
+	],
+	"license": "MIT",
+	"icon": "assets/terracraft/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.eboac.terracraft.TerraCraft"
+		],
+		"client": [
+			"com.eboac.terracraft.client.TerraCraftClient"
+		]
+	},
+	"mixins": [
+		"terracraft.mixins.json",
+		{
+			"config": "terracraft.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
