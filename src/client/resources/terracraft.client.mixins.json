@@ -4,7 +4,8 @@
 	"compatibilityLevel": "JAVA_25",
 	"client": [
 		"CrafterScreenMixin",
-		"InventoryScreenMixin"
+		"InventoryScreenMixin",
+		"RecipeBookScreenMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

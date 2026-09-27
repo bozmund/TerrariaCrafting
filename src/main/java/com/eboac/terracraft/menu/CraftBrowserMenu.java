@@ -363,7 +363,9 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         result.onCraftedBy(serverPlayer, result.getCount());
-        serverPlayer.awardRecipes(List.<RecipeHolder<?>>of(holder));
+        // Deliberately not awarding the recipe. The crafting recipe book is disabled, so
+        // unlocking would only spend a packet per craft and pop a "New Recipes Unlocked" toast
+        // for a book the player cannot open.
 
         if (toInventory) {
             giveToPlayer(serverPlayer, result);
