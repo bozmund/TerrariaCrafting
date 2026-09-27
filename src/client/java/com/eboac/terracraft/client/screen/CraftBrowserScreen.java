@@ -154,9 +154,10 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
             if (target != this.menu.scrollRow()) {
                 sendState(target);
             }
-            return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        // Always consume, even when the list fits on one page. Letting the event through gives
+        // inventory-tweak mods a chance to turn a scroll into slot clicks over the recipe grid.
+        return true;
     }
 
     private void scrollTo(double mouseY) {
@@ -275,6 +276,41 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
 
     private void slot(GuiGraphicsExtractor graphics, int x, int y) {
         sunken(graphics, x - 1, y - 1, SLOT, SLOT);
+    }
+
+    /**
+     * Appends the recipe's cost to the tooltip of a hovered result.
+     *
+     * <p>The counts come from the server with the page rather than being asked for on hover, so
+     * the tooltip is complete the instant it appears.
+     */
+    @Override
+    protected java.util.List<Component> getTooltipFromContainerItem(net.minecraft.world.item.ItemStack stack) {
+        java.util.List<Component> lines = new java.util.ArrayList<>(super.getTooltipFromContainerItem(stack));
+
+        Slot hovered = this.hoveredSlot;
+        if (hovered == null) {
+            return lines;
+        }
+        int index = this.menu.slots.indexOf(hovered);
+        if (index < 0 || index >= CraftBrowserMenu.DISPLAY_SLOTS) {
+            return lines;
+        }
+
+        java.util.List<net.minecraft.world.item.ItemStack> costs = this.menu.ingredientsFor(index);
+        if (costs.isEmpty()) {
+            return lines;
+        }
+
+        lines.add(Component.empty());
+        lines.add(Component.translatable("gui.terracraft.needs")
+                .withStyle(net.minecraft.ChatFormatting.GRAY));
+        for (net.minecraft.world.item.ItemStack cost : costs) {
+            lines.add(Component.literal("  " + cost.getCount() + "x ")
+                    .append(cost.getHoverName())
+                    .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
+        }
+        return lines;
     }
 
     @Override

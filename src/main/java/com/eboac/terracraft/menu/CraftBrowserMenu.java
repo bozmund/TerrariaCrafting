@@ -76,6 +76,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     private boolean showUncraftable = false;
     private String search = "";
     private int totalEntries;
+    /** What each visible cell costs, one list per cell. Mirrored on the client for tooltips. */
+    private List<List<ItemStack>> visibleIngredients = List.of();
     /** Visible cells that can be made right now. */
     private long craftableMask;
     /** Visible cells reachable only by running intermediate crafts first. */
@@ -165,12 +167,14 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
 
         craftableMask = 0L;
         chainMask = 0L;
+        List<List<ItemStack>> costs = new ArrayList<>(DISPLAY_SLOTS);
         int first = scrollRow * COLUMNS;
         for (int i = 0; i < DISPLAY_SLOTS; i++) {
             int index = first + i;
             if (index < entries.size()) {
                 CraftEntry entry = entries.get(index);
                 display.setItem(i, entry.result().copy());
+                costs.add(RecipeScanner.ingredientCounts(entry.holder().value()));
                 switch (entry.tier()) {
                     case 0 -> craftableMask |= 1L << i;
                     case 1 -> chainMask |= 1L << i;
@@ -179,12 +183,14 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
                 }
             } else {
                 display.setItem(i, ItemStack.EMPTY);
+                costs.add(List.of());
             }
         }
+        visibleIngredients = costs;
 
         broadcastChanges();
         ServerPlayNetworking.send(serverPlayer, new BrowserStatePayload(
-                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask));
+                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask, visibleIngredients));
     }
 
     /** Applies the display controls the client asked for. None of these affect game state. */
@@ -229,13 +235,21 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         if (slotId >= 0 && slotId < DISPLAY_SLOTS) {
+            // Only the two gestures we actually mean may craft. Everything else that can arrive
+            // as a slot click -- throwing with Q, double-click gather, click-drag, number-key
+            // swap, middle-click clone -- is swallowed. Treating any click as a craft let a
+            // stray gesture, or another mod synthesising clicks, craft by accident.
+            boolean pickup = input == ContainerInput.PICKUP;
+            boolean quickMove = input == ContainerInput.QUICK_MOVE;
+            if ((!pickup && !quickMove) || button < 0 || button > 1) {
+                return;
+            }
+
             if (clickingPlayer instanceof ServerPlayer serverPlayer) {
-                boolean shift = input == ContainerInput.QUICK_MOVE;
-                boolean rightButton = button == 1;
                 // shift+right: make as many as the materials allow.
                 // shift+left: exactly one, into the inventory, so repeated clicks count out.
                 // plain click: exactly one, onto the cursor.
-                craft(serverPlayer, slotId, shift, shift && rightButton);
+                craft(serverPlayer, slotId, quickMove, quickMove && button == 1);
             }
             return;
         }
@@ -403,12 +417,20 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     // ------------------------------------------------------------------
 
     public void acceptState(int totalEntries, int scrollRow, boolean showUncraftable,
-                            long craftableMask, long chainMask) {
+                            long craftableMask, long chainMask, List<List<ItemStack>> ingredients) {
         this.totalEntries = totalEntries;
         this.scrollRow = scrollRow;
         this.showUncraftable = showUncraftable;
         this.craftableMask = craftableMask;
         this.chainMask = chainMask;
+        this.visibleIngredients = ingredients;
+    }
+
+    /** What the recipe in this visible cell costs, for the hover tooltip. */
+    public List<ItemStack> ingredientsFor(int displaySlot) {
+        return displaySlot >= 0 && displaySlot < visibleIngredients.size()
+                ? visibleIngredients.get(displaySlot)
+                : List.of();
     }
 
     /** True if the player can get this item, directly or by running intermediate crafts. */

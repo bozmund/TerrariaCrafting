@@ -147,6 +147,34 @@ public final class RecipeScanner {
         return new ScanResult(entries, byOutput, results);
     }
 
+    /**
+     * What one craft of this recipe costs, as one stack per distinct ingredient with its count
+     * set to how many cells call for it.
+     *
+     * <p>{@code ingredients()} is one entry per grid cell rather than per distinct item, so a
+     * recipe wanting five iron ingots arrives as five separate entries and has to be grouped.
+     */
+    public static List<ItemStack> ingredientCounts(CraftingRecipe recipe) {
+        PlacementInfo placement = recipe.placementInfo();
+        IntList slotToIngredient = placement.slotsToIngredientIndex();
+        List<Ingredient> ingredients = placement.ingredients();
+
+        Map<Item, Integer> counts = new java.util.LinkedHashMap<>();
+        for (int cell = 0; cell < slotToIngredient.size(); cell++) {
+            int index = slotToIngredient.getInt(cell);
+            if (index == PlacementInfo.EMPTY_SLOT) {
+                continue;
+            }
+            // A tag ingredient accepts many items; the first stands in for the rest on screen.
+            ingredients.get(index).items().findFirst()
+                    .ifPresent(holder -> counts.merge(holder.value(), 1, Integer::sum));
+        }
+
+        List<ItemStack> costs = new ArrayList<>(counts.size());
+        counts.forEach((item, count) -> costs.add(new ItemStack(item, count)));
+        return costs;
+    }
+
     /** True if this recipe consumes the given item, so "what can I make from this?" can be asked. */
     private static boolean usesIngredient(CraftingRecipe recipe, ItemStack stack) {
         for (Ingredient ingredient : recipe.placementInfo().ingredients()) {
