@@ -23,7 +23,7 @@ import java.util.List;
  * than after a round trip.
  */
 public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showUncraftable,
-                                  long craftableMask, long chainMask,
+                                  long craftableMask, long chainMask, long specialMask,
                                   List<List<ItemStack>> ingredients)
         implements CustomPacketPayload {
 
@@ -36,6 +36,7 @@ public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showU
                     ByteBufCodecs.BOOL, BrowserStatePayload::showUncraftable,
                     ByteBufCodecs.VAR_LONG, BrowserStatePayload::craftableMask,
                     ByteBufCodecs.VAR_LONG, BrowserStatePayload::chainMask,
+                    ByteBufCodecs.VAR_LONG, BrowserStatePayload::specialMask,
                     ItemStack.OPTIONAL_STREAM_CODEC.apply(ByteBufCodecs.list()).apply(ByteBufCodecs.list()),
                     BrowserStatePayload::ingredients,
                     BrowserStatePayload::new);

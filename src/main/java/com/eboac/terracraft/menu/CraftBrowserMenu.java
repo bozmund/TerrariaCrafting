@@ -82,6 +82,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     private long craftableMask;
     /** Visible cells reachable only by running intermediate crafts first. */
     private long chainMask;
+    /** Visible cells that open a real crafting grid instead of crafting directly. */
+    private long specialMask;
 
     public CraftBrowserMenu(int containerId, Inventory playerInventory) {
         super(ModMenus.CRAFT_BROWSER, containerId);
@@ -147,8 +149,10 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
 
         List<CraftEntry> updated = new ArrayList<>(entries.size());
         for (CraftEntry entry : entries) {
-            updated.add(new CraftEntry(entry.holder(), entry.result(),
-                    planner.plan(entry.holder().value())));
+            // A special entry has no "steps" to re-plan -- its one bit of state is the icon,
+            // which the planner knows nothing about and would only wipe.
+            updated.add(entry.special() ? entry
+                    : CraftEntry.normal(entry.holder(), entry.result(), planner.plan(entry.holder().value())));
         }
         entries = updated;
 
@@ -167,6 +171,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
 
         craftableMask = 0L;
         chainMask = 0L;
+        specialMask = 0L;
         List<List<ItemStack>> costs = new ArrayList<>(DISPLAY_SLOTS);
         int first = scrollRow * COLUMNS;
         for (int i = 0; i < DISPLAY_SLOTS; i++) {
@@ -174,10 +179,11 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
             if (index < entries.size()) {
                 CraftEntry entry = entries.get(index);
                 display.setItem(i, entry.result().copy());
-                costs.add(RecipeScanner.ingredientCounts(entry.holder().value()));
+                costs.add(entry.special() ? List.of() : RecipeScanner.ingredientCounts(entry.holder().value()));
                 switch (entry.tier()) {
                     case 0 -> craftableMask |= 1L << i;
                     case 1 -> chainMask |= 1L << i;
+                    case 3 -> specialMask |= 1L << i;
                     default -> {
                     }
                 }
@@ -190,7 +196,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
 
         broadcastChanges();
         ServerPlayNetworking.send(serverPlayer, new BrowserStatePayload(
-                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask, visibleIngredients));
+                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask, specialMask, visibleIngredients));
     }
 
     /** Applies the display controls the client asked for. None of these affect game state. */
@@ -246,6 +252,11 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
             }
 
             if (clickingPlayer instanceof ServerPlayer serverPlayer) {
+                int index = scrollRow * COLUMNS + slotId;
+                if (index >= 0 && index < entries.size() && entries.get(index).special()) {
+                    openManualCrafting(serverPlayer);
+                    return;
+                }
                 // shift+right: make as many as the materials allow.
                 // shift+left: exactly one, into the inventory, so repeated clicks count out.
                 // plain click: exactly one, onto the cursor.
@@ -378,6 +389,22 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         return true;
     }
 
+    /**
+     * Opens a genuine vanilla crafting grid for recipes the browser cannot represent.
+     *
+     * <p>A special recipe's result depends on the exact item placed -- which written book, which
+     * modded codex -- so there is no "click to craft" for it; the player has to place the real
+     * item themselves. Rather than reinventing grid matching for this one case, this just reopens
+     * {@code CraftingMenu}, the same class the vanilla crafting table used before it was replaced
+     * by this browser, so every recipe in the game (special or not, vanilla or modded) works
+     * exactly as it always has.
+     */
+    private void openManualCrafting(ServerPlayer serverPlayer) {
+        serverPlayer.openMenu(new net.minecraft.world.SimpleMenuProvider(
+                (id, inventory, p) -> new net.minecraft.world.inventory.CraftingMenu(id, inventory),
+                net.minecraft.network.chat.Component.translatable("container.crafting")));
+    }
+
     private void giveToPlayer(ServerPlayer serverPlayer, ItemStack stack) {
         if (!serverPlayer.getInventory().add(stack)) {
             serverPlayer.drop(stack, false, net.minecraft.util.Prediction.SERVER_ONLY);
@@ -419,12 +446,14 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     // ------------------------------------------------------------------
 
     public void acceptState(int totalEntries, int scrollRow, boolean showUncraftable,
-                            long craftableMask, long chainMask, List<List<ItemStack>> ingredients) {
+                            long craftableMask, long chainMask, long specialMask,
+                            List<List<ItemStack>> ingredients) {
         this.totalEntries = totalEntries;
         this.scrollRow = scrollRow;
         this.showUncraftable = showUncraftable;
         this.craftableMask = craftableMask;
         this.chainMask = chainMask;
+        this.specialMask = specialMask;
         this.visibleIngredients = ingredients;
     }
 
@@ -444,6 +473,11 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     /** True if getting this item needs intermediate crafts first. */
     public boolean isDisplaySlotChained(int displaySlot) {
         return (chainMask & (1L << displaySlot)) != 0L;
+    }
+
+    /** True if clicking this slot opens a real crafting grid instead of crafting directly. */
+    public boolean isDisplaySlotSpecial(int displaySlot) {
+        return (specialMask & (1L << displaySlot)) != 0L;
     }
 
     public int totalEntries() {

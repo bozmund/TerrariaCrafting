@@ -21,7 +21,7 @@ public class TerraCraftClient implements ClientModInitializer {
 			if (context.player().containerMenu instanceof CraftBrowserMenu menu) {
 				menu.acceptState(payload.totalEntries(), payload.scrollRow(),
 						payload.showUncraftable(), payload.craftableMask(), payload.chainMask(),
-						payload.ingredients());
+						payload.specialMask(), payload.ingredients());
 			}
 		});
 

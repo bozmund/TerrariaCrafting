@@ -53,6 +53,7 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     private static final int COLOUR_SLOT_EDGE = 0xFF373737;
     private static final int COLOUR_UNCRAFTABLE = 0xA0101010;
     private static final int COLOUR_CHAINED = 0xFF5FD068;
+    private static final int COLOUR_SPECIAL = 0xFFE0A030;
     private static final int COLOUR_TOGGLE_ON = 0xFF4CAF50;
     private static final int COLOUR_TOGGLE_OFF = 0xFF7A7A7A;
 
@@ -297,6 +298,13 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
             return lines;
         }
 
+        if (this.menu.isDisplaySlotSpecial(index)) {
+            lines.add(Component.empty());
+            lines.add(Component.translatable("gui.terracraft.special")
+                    .withStyle(net.minecraft.ChatFormatting.GOLD));
+            return lines;
+        }
+
         java.util.List<net.minecraft.world.item.ItemStack> costs = this.menu.ingredientsFor(index);
         if (costs.isEmpty()) {
             return lines;
@@ -322,7 +330,14 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
             return;
         }
 
-        if (!this.menu.isDisplaySlotObtainable(index)) {
+        if (this.menu.isDisplaySlotSpecial(index)) {
+            // Its result depends on the exact item placed -- which written book, which modded
+            // codex -- so there is nothing to craft directly. A full-brightness, differently
+            // coloured corner mark says "this exists and is reachable" without implying one
+            // click will make it, the way the chained mark does.
+            graphics.fill(slot.x, slot.y, slot.x + 3, slot.y + 1, COLOUR_SPECIAL);
+            graphics.fill(slot.x, slot.y, slot.x + 1, slot.y + 3, COLOUR_SPECIAL);
+        } else if (!this.menu.isDisplaySlotObtainable(index)) {
             // Out of reach entirely -- dim it, the way the recipe book does.
             graphics.fill(slot.x, slot.y, slot.x + 16, slot.y + 16, COLOUR_UNCRAFTABLE);
         } else if (this.menu.isDisplaySlotChained(index)) {

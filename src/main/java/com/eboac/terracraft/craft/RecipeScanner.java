@@ -2,6 +2,7 @@ package com.eboac.terracraft.craft;
 
 import it.unimi.dsi.fastutil.ints.IntList;
 import net.minecraft.core.Holder;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.item.Item;
@@ -89,15 +90,38 @@ public final class RecipeScanner {
         Map<RecipeHolder<CraftingRecipe>, ItemStack> results = new HashMap<>();
         Map<Item, List<RecipeHolder<CraftingRecipe>>> byOutput = new HashMap<>();
 
+        // Special recipes -- map cloning, firework assembly, armour dyeing, a modded "codex +
+        // paper" recipe -- compute their result from the exact item placed (which Cave Codex,
+        // which written book), so there is no single item to show as a one-click result. They go
+        // in a list of their own; see the loop below.
+        List<CraftEntry> specialEntries = new ArrayList<>();
+
         for (RecipeHolder<?> holder : server.getRecipeManager().getRecipes()) {
             if (!(holder.value() instanceof CraftingRecipe recipe)) {
                 continue;
             }
-            // Special recipes (map cloning, firework assembly, armour dyeing...) compute their
-            // result from the exact inputs, so there is no single item to show in a browser.
-            if (recipe.isSpecial() || recipe.placementInfo().isImpossibleToPlace()) {
+            if (recipe.placementInfo().isImpossibleToPlace()) {
                 continue;
             }
+
+            if (recipe.isSpecial()) {
+                // These always need the full grid, so require a station the same as any other
+                // recipe bigger than the hand grid, and are not affected by the craftable-only
+                // toggle -- there is no "craftable" to test without real items in real slots.
+                if (!pool.hasCraftingTableNearby()) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                RecipeHolder<CraftingRecipe> typedSpecial = (RecipeHolder<CraftingRecipe>) holder;
+                ItemStack icon = specialIcon(typedSpecial);
+                if (!query.isEmpty()
+                        && !icon.getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)) {
+                    continue;
+                }
+                specialEntries.add(CraftEntry.special(typedSpecial, icon));
+                continue;
+            }
+
             // Terraria-style station rule: without a crafting table nearby you are limited to
             // what fits in the 2x2 grid you always carry with you.
             if (!pool.hasCraftingTableNearby() && !fitsInHandGrid(recipe)) {
@@ -136,15 +160,48 @@ public final class RecipeScanner {
             if (steps == null && !includeUnobtainable) {
                 continue;
             }
-            entries.add(new CraftEntry(holder, result, steps));
+            entries.add(CraftEntry.normal(holder, result, steps));
         }
 
-        // Craftable now, then craftable via a chain, then the rest -- alphabetical within each.
+        entries.addAll(specialEntries);
+
+        // Craftable now, then craftable via a chain, then the rest, then special entries always
+        // last -- alphabetical within each tier.
         entries.sort(Comparator
                 .comparingInt(CraftEntry::tier)
                 .thenComparing(entry -> entry.result().getHoverName().getString()));
 
         return new ScanResult(entries, byOutput, results);
+    }
+
+    /**
+     * A representative icon and name for a special recipe, since its real result cannot be
+     * computed without the exact item the player intends to use.
+     *
+     * <p>Most recipes -- vanilla and modded alike -- share their registry id with the item they
+     * are "about" (the recipe {@code alexscaves:cave_biome_map} produces the item of the same
+     * id), so that is tried first. Falling back to a plain crafting table icon with the id's path
+     * turned into a readable name covers whatever does not follow that convention.
+     */
+    private static ItemStack specialIcon(RecipeHolder<CraftingRecipe> holder) {
+        Identifier id = holder.id().identifier();
+        Optional<Item> directMatch = net.minecraft.core.registries.BuiltInRegistries.ITEM.getOptional(id);
+
+        ItemStack icon = directMatch.map(item -> new ItemStack(item, 1))
+                .orElseGet(() -> new ItemStack(net.minecraft.world.item.Items.CRAFTING_TABLE));
+
+        if (directMatch.isEmpty()) {
+            String[] words = id.getPath().split("_");
+            StringBuilder name = new StringBuilder();
+            for (String word : words) {
+                if (!word.isEmpty()) {
+                    name.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1)).append(' ');
+                }
+            }
+            icon.set(net.minecraft.core.component.DataComponents.CUSTOM_NAME,
+                    net.minecraft.network.chat.Component.literal(name.toString().strip()));
+        }
+        return icon;
     }
 
     /**
