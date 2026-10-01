@@ -10,6 +10,7 @@ public class ModNetworking {
 
     public static void init() {
         PayloadTypeRegistry.serverboundPlay().register(OpenBrowserPayload.TYPE, OpenBrowserPayload.CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(OpenManualCraftingPayload.TYPE, OpenManualCraftingPayload.CODEC);
         PayloadTypeRegistry.serverboundPlay().register(BrowserActionPayload.TYPE, BrowserActionPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(BrowserStatePayload.TYPE, BrowserStatePayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(CrafterNeedsPayload.TYPE, CrafterNeedsPayload.CODEC);
@@ -17,6 +18,14 @@ public class ModNetworking {
 
         ServerPlayNetworking.registerGlobalReceiver(OpenBrowserPayload.TYPE, (payload, context) ->
                 openBrowser(context.player()));
+
+        ServerPlayNetworking.registerGlobalReceiver(OpenManualCraftingPayload.TYPE, (payload, context) -> {
+            // Only act if the player really has our browser open; a modified client could send
+            // this from anywhere, and requestManualCrafting re-checks the table itself anyway.
+            if (context.player().containerMenu instanceof CraftBrowserMenu menu) {
+                menu.requestManualCrafting(context.player());
+            }
+        });
 
         ServerPlayNetworking.registerGlobalReceiver(RequestCrafterNeedsPayload.TYPE, (payload, context) -> {
             if (context.player().containerMenu instanceof com.eboac.terracraft.crafter.CrafterNeeds needs) {

@@ -45,6 +45,13 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     private static final int TOGGLE_Y = 14;
     private static final int TOGGLE_SIZE = 12;
 
+    // Sits in the blank band between the recipe grid (ends at GRID_Y + 5*SLOT = 122) and the
+    // player inventory (starts at 140), only drawn when a crafting table is actually nearby.
+    private static final int TABLE_BUTTON_X = 100;
+    private static final int TABLE_BUTTON_Y = 123;
+    private static final int TABLE_BUTTON_WIDTH = 86;
+    private static final int TABLE_BUTTON_HEIGHT = 14;
+
     // Vanilla's GUI palette, so the panel does not look out of place.
     private static final int COLOUR_PANEL = 0xFFC6C6C6;
     private static final int COLOUR_SHADOW = 0xFF555555;
@@ -54,6 +61,7 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     private static final int COLOUR_UNCRAFTABLE = 0xA0101010;
     private static final int COLOUR_CHAINED = 0xFF5FD068;
     private static final int COLOUR_SPECIAL = 0xFFE0A030;
+    private static final int COLOUR_BUTTON_TEXT = 0xFF402A00;
     private static final int COLOUR_TOGGLE_ON = 0xFF4CAF50;
     private static final int COLOUR_TOGGLE_OFF = 0xFF7A7A7A;
 
@@ -120,6 +128,12 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
 
         if (isOver(mouseX, mouseY, TOGGLE_X, TOGGLE_Y, TOGGLE_SIZE, TOGGLE_SIZE)) {
             sendToggle();
+            return true;
+        }
+
+        if (this.menu.tableNearby()
+                && isOver(mouseX, mouseY, TABLE_BUTTON_X, TABLE_BUTTON_Y, TABLE_BUTTON_WIDTH, TABLE_BUTTON_HEIGHT)) {
+            ClientPlayNetworking.send(new com.eboac.terracraft.net.OpenManualCraftingPayload());
             return true;
         }
 
@@ -191,7 +205,9 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
         // and throw the item on your cursor onto the floor.
         return super.hasClickedOutside(mouseX, mouseY, guiLeft, guiTop)
                 && !isOver(mouseX, mouseY, SCROLLBAR_X, SCROLLBAR_Y, SCROLLBAR_WIDTH, SCROLLBAR_HEIGHT)
-                && !isOver(mouseX, mouseY, TOGGLE_X, TOGGLE_Y, TOGGLE_SIZE, TOGGLE_SIZE);
+                && !isOver(mouseX, mouseY, TOGGLE_X, TOGGLE_Y, TOGGLE_SIZE, TOGGLE_SIZE)
+                && !(this.menu.tableNearby()
+                        && isOver(mouseX, mouseY, TABLE_BUTTON_X, TABLE_BUTTON_Y, TABLE_BUTTON_WIDTH, TABLE_BUTTON_HEIGHT));
     }
 
     private boolean isOver(double mouseX, double mouseY, int x, int y, int width, int height) {
@@ -238,6 +254,27 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
 
         drawScrollbar(graphics, x, y);
         drawToggle(graphics, x, y);
+        if (this.menu.tableNearby()) {
+            drawTableButton(graphics, x, y);
+        }
+    }
+
+    /**
+     * Lets the player drop into a real, vanilla crafting grid -- for special recipes the browser
+     * cannot represent, or simply because they want it. Only shown when a crafting table is
+     * actually nearby, the same rule that unlocks recipes bigger than the 2x2 hand grid.
+     */
+    private void drawTableButton(GuiGraphicsExtractor graphics, int x, int y) {
+        int left = x + TABLE_BUTTON_X;
+        int top = y + TABLE_BUTTON_Y;
+        panel(graphics, left, top, TABLE_BUTTON_WIDTH, TABLE_BUTTON_HEIGHT);
+
+        Component label = Component.translatable("gui.terracraft.open_table");
+        int textWidth = this.font.width(label);
+        graphics.text(this.font, label,
+                left + Math.max(2, (TABLE_BUTTON_WIDTH - textWidth) / 2),
+                top + (TABLE_BUTTON_HEIGHT - this.font.lineHeight) / 2,
+                COLOUR_BUTTON_TEXT);
     }
 
     private void drawScrollbar(GuiGraphicsExtractor graphics, int x, int y) {

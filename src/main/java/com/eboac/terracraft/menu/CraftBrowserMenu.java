@@ -84,6 +84,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     private long chainMask;
     /** Visible cells that open a real crafting grid instead of crafting directly. */
     private long specialMask;
+    /** Whether a crafting table is currently within range, same rule as the station check. */
+    private boolean tableNearby;
 
     public CraftBrowserMenu(int containerId, Inventory playerInventory) {
         super(ModMenus.CRAFT_BROWSER, containerId);
@@ -168,6 +170,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         totalEntries = entries.size();
         int maxRow = Math.max(0, (totalEntries + COLUMNS - 1) / COLUMNS - VISIBLE_ROWS);
         scrollRow = Math.clamp(scrollRow, 0, maxRow);
+        tableNearby = pool != null && pool.hasCraftingTableNearby();
 
         craftableMask = 0L;
         chainMask = 0L;
@@ -196,7 +199,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
 
         broadcastChanges();
         ServerPlayNetworking.send(serverPlayer, new BrowserStatePayload(
-                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask, specialMask, visibleIngredients));
+                totalEntries, scrollRow, showUncraftable, craftableMask, chainMask, specialMask,
+                tableNearby, visibleIngredients));
     }
 
     /** Applies the display controls the client asked for. None of these affect game state. */
@@ -254,7 +258,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
             if (clickingPlayer instanceof ServerPlayer serverPlayer) {
                 int index = scrollRow * COLUMNS + slotId;
                 if (index >= 0 && index < entries.size() && entries.get(index).special()) {
-                    openManualCrafting(serverPlayer);
+                    tryOpenManualCrafting(serverPlayer);
                     return;
                 }
                 // shift+right: make as many as the materials allow.
@@ -390,16 +394,27 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     }
 
     /**
-     * Opens a genuine vanilla crafting grid for recipes the browser cannot represent.
+     * Entry point for the explicit "crafting grid" button, reached via {@code ModNetworking}.
      *
-     * <p>A special recipe's result depends on the exact item placed -- which written book, which
-     * modded codex -- so there is no "click to craft" for it; the player has to place the real
-     * item themselves. Rather than reinventing grid matching for this one case, this just reopens
-     * {@code CraftingMenu}, the same class the vanilla crafting table used before it was replaced
-     * by this browser, so every recipe in the game (special or not, vanilla or modded) works
-     * exactly as it always has.
+     * <p>The button is only drawn client-side when {@link #tableNearby} was true as of the last
+     * page sent -- but that can be seconds old, and a modified client could send the request
+     * regardless of what it draws. {@link #tryOpenManualCrafting} re-checks against the live world
+     * before honouring it, the same "never trust the client's last-known state" rule the craft
+     * path itself follows.
      */
-    private void openManualCrafting(ServerPlayer serverPlayer) {
+    public void requestManualCrafting(ServerPlayer serverPlayer) {
+        tryOpenManualCrafting(serverPlayer);
+    }
+
+    /**
+     * Opens a genuine vanilla crafting grid for recipes the browser cannot represent, or for
+     * players who just want the classic grid back -- but only if a crafting table is still
+     * actually nearby right now, regardless of whether it was a moment ago.
+     */
+    private void tryOpenManualCrafting(ServerPlayer serverPlayer) {
+        if (!IngredientPool.gather(serverPlayer).hasCraftingTableNearby()) {
+            return;
+        }
         serverPlayer.openMenu(new net.minecraft.world.SimpleMenuProvider(
                 (id, inventory, p) -> new net.minecraft.world.inventory.CraftingMenu(id, inventory),
                 net.minecraft.network.chat.Component.translatable("container.crafting")));
@@ -446,7 +461,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     // ------------------------------------------------------------------
 
     public void acceptState(int totalEntries, int scrollRow, boolean showUncraftable,
-                            long craftableMask, long chainMask, long specialMask,
+                            long craftableMask, long chainMask, long specialMask, boolean tableNearby,
                             List<List<ItemStack>> ingredients) {
         this.totalEntries = totalEntries;
         this.scrollRow = scrollRow;
@@ -454,7 +469,13 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         this.craftableMask = craftableMask;
         this.chainMask = chainMask;
         this.specialMask = specialMask;
+        this.tableNearby = tableNearby;
         this.visibleIngredients = ingredients;
+    }
+
+    /** Whether to show the "open a real crafting grid" button at all. */
+    public boolean tableNearby() {
+        return tableNearby;
     }
 
     /** What the recipe in this visible cell costs, for the hover tooltip. */

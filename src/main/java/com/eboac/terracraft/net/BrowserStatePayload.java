@@ -24,7 +24,7 @@ import java.util.List;
  */
 public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showUncraftable,
                                   long craftableMask, long chainMask, long specialMask,
-                                  List<List<ItemStack>> ingredients)
+                                  boolean tableNearby, List<List<ItemStack>> ingredients)
         implements CustomPacketPayload {
 
     public static final Type<BrowserStatePayload> TYPE = new Type<>(TerraCraft.id("browser_state"));
@@ -37,6 +37,7 @@ public record BrowserStatePayload(int totalEntries, int scrollRow, boolean showU
                     ByteBufCodecs.VAR_LONG, BrowserStatePayload::craftableMask,
                     ByteBufCodecs.VAR_LONG, BrowserStatePayload::chainMask,
                     ByteBufCodecs.VAR_LONG, BrowserStatePayload::specialMask,
+                    ByteBufCodecs.BOOL, BrowserStatePayload::tableNearby,
                     ItemStack.OPTIONAL_STREAM_CODEC.apply(ByteBufCodecs.list()).apply(ByteBufCodecs.list()),
                     BrowserStatePayload::ingredients,
                     BrowserStatePayload::new);
