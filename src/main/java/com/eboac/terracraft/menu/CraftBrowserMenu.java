@@ -359,7 +359,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         grown.addAll(added);
         entries = grown;
 
-        com.eboac.terracraft.TerraCraft.LOGGER.debug(
+        com.eboac.terracraft.TerraCraft.LOGGER.info(
                 "browser refresh: {} new entries from {} changed items, {} total",
                 added.size(), changed.size(), entries.size());
 
