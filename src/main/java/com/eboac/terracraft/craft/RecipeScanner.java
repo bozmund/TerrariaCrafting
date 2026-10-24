@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -53,8 +54,19 @@ public final class RecipeScanner {
     private RecipeScanner() {
     }
 
+    /**
+     * Bumped whenever the recipe set is thrown away, so an already-open browser can tell that the
+     * scan it is holding describes recipes that no longer exist.
+     */
+    private static final AtomicLong EPOCH = new AtomicLong();
+
     public static void invalidate() {
         PREVIEW_CACHE.clear();
+        EPOCH.incrementAndGet();
+    }
+
+    public static long epoch() {
+        return EPOCH.get();
     }
 
     /**
@@ -62,11 +74,16 @@ public final class RecipeScanner {
      * every single craft -- the pool changes underneath it -- and rebuilding them per craft would
      * mean walking the whole recipe list again.
      *
-     * @param byOutput which recipes produce a given item
-     * @param results  each recipe's result stack
+     * @param entries      what the player sees, in display order
+     * @param byOutput     which recipes produce a given item
+     * @param byIngredient which recipes consume a given item. Only this lets an incremental refresh
+     *                     ask "what just became possible?" without re-planning every recipe in the
+     *                     game: an item appearing in the pool can only unlock recipes that use it.
+     * @param results      each recipe's result stack
      */
     public record ScanResult(List<CraftEntry> entries,
                              Map<Item, List<RecipeHolder<CraftingRecipe>>> byOutput,
+                             Map<Item, List<RecipeHolder<CraftingRecipe>>> byIngredient,
                              Map<RecipeHolder<CraftingRecipe>, ItemStack> results) {
     }
 
@@ -89,6 +106,7 @@ public final class RecipeScanner {
         List<RecipeHolder<CraftingRecipe>> usable = new ArrayList<>();
         Map<RecipeHolder<CraftingRecipe>, ItemStack> results = new HashMap<>();
         Map<Item, List<RecipeHolder<CraftingRecipe>>> byOutput = new HashMap<>();
+        Map<Item, List<RecipeHolder<CraftingRecipe>>> byIngredient = new HashMap<>();
 
         // Special recipes -- map cloning, firework assembly, armour dyeing, a modded "codex +
         // paper" recipe -- compute their result from the exact item placed (which Cave Codex,
@@ -141,6 +159,13 @@ public final class RecipeScanner {
             usable.add(typed);
             results.put(typed, preview);
             byOutput.computeIfAbsent(preview.getItem(), item -> new ArrayList<>()).add(typed);
+
+            // Indexed by every item the recipe will accept, tags expanded. This is what makes an
+            // incremental refresh cheap instead of a second full scan.
+            for (Ingredient ingredient : typed.value().placementInfo().ingredients()) {
+                ingredient.items().forEach(accepted -> byIngredient
+                        .computeIfAbsent(accepted.value(), item -> new ArrayList<>()).add(typed));
+            }
         }
 
         // Pass two: how reachable is each one? The planner needs byOutput built first, which is
@@ -171,7 +196,7 @@ public final class RecipeScanner {
                 .comparingInt(CraftEntry::tier)
                 .thenComparing(entry -> entry.result().getHoverName().getString()));
 
-        return new ScanResult(entries, byOutput, results);
+        return new ScanResult(entries, byOutput, byIngredient, results);
     }
 
     /**
@@ -233,7 +258,7 @@ public final class RecipeScanner {
     }
 
     /** True if this recipe consumes the given item, so "what can I make from this?" can be asked. */
-    private static boolean usesIngredient(CraftingRecipe recipe, ItemStack stack) {
+    public static boolean usesIngredient(CraftingRecipe recipe, ItemStack stack) {
         for (Ingredient ingredient : recipe.placementInfo().ingredients()) {
             if (ingredient.test(stack)) {
                 return true;
