@@ -8,7 +8,9 @@ import com.eboac.terracraft.craft.RecipeScanner;
 import com.eboac.terracraft.net.BrowserStatePayload;
 import com.eboac.terracraft.registry.ModMenus;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.NonNullList;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.player.Inventory;
@@ -16,12 +18,18 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The Terraria-style crafting browser.
@@ -66,6 +74,16 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
      */
     private static final int MAX_BULK_CRAFTS = 256;
 
+    /** How often an open browser re-reads what the player is carrying. Ten ticks is half a second. */
+    private static final int CARRY_CHECK_INTERVAL_TICKS = 10;
+
+    /**
+     * Upper bound on what one refresh may add. Picking up a stack of a brand-new modded log can
+     * unlock a whole family of recipes at once, and dumping all of them in one frame is both a
+     * stutter and a wall of icons the player did not ask for.
+     */
+    private static final int MAX_APPENDS_PER_REFRESH = 48;
+
     // ---- server-side state ----
     private List<CraftEntry> entries = List.of();
     private RecipeScanner.ScanResult scan;
@@ -86,6 +104,25 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     private long specialMask;
     /** Whether a crafting table is currently within range, same rule as the station check. */
     private boolean tableNearby;
+
+    // ---- incremental refresh state (server only) ----
+    /**
+     * Ticks until the next carry check. {@code broadcastChanges} runs once per tick for the open
+     * menu, so counting down from the interval is enough and avoids depending on a level clock
+     * accessor.
+     */
+    private int carryCheckCountdown = CARRY_CHECK_INTERVAL_TICKS;
+    private Map<Item, Integer> lastCarriedCounts = Map.of();
+    /** Where the player was the last time the station was re-checked, so standing still costs nothing. */
+    private BlockPos lastStationCheckPos = null;
+    /** The station state the current list was built under. Changing it changes eligibility, not affordability. */
+    private boolean lastStationKnown;
+    /** Detects a datapack reload: the held scan then describes recipes that no longer exist. */
+    private long lastScanEpoch;
+    /** Recipe ids already in {@link #entries}, so a refresh never lists the same recipe twice. */
+    private final Set<ResourceKey<Recipe<?>>> listedRecipeIds = new HashSet<>();
+    /** Guards against re-entry: {@link #repaginate} calls {@code broadcastChanges}, which drives the refresh. */
+    private boolean refreshing;
 
     public CraftBrowserMenu(int containerId, Inventory playerInventory) {
         super(ModMenus.CRAFT_BROWSER, containerId);
@@ -127,6 +164,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         scan = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
                 pool, showUncraftable, search, ingredientFilter.getItem(0));
         entries = scan.entries();
+        rememberListState(serverPlayer);
         com.eboac.terracraft.TerraCraft.LOGGER.debug(
                 "browser rebuild: {} entries from {} item stacks, table={}, search='{}', showUncraftable={}, {} ms",
                 entries.size(), pool.sourceCount(), pool.hasCraftingTableNearby(), search, showUncraftable,
@@ -157,6 +195,173 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
                     : CraftEntry.normal(entry.holder(), entry.result(), planner.plan(entry.holder().value())));
         }
         entries = updated;
+
+        repaginate();
+    }
+
+    /**
+     * Records what the current list was built from, so {@link #tickRefresh} can tell an actual
+     * change apart from a tick that changed nothing.
+     */
+    private void rememberListState(ServerPlayer serverPlayer) {
+        listedRecipeIds.clear();
+        for (CraftEntry entry : entries) {
+            listedRecipeIds.add(entry.holder().id());
+        }
+        lastCarriedCounts = IngredientPool.carriedCounts(serverPlayer);
+        lastStationKnown = pool != null && pool.hasCraftingTableNearby();
+        lastStationCheckPos = serverPlayer.blockPosition().immutable();
+        lastScanEpoch = RecipeScanner.epoch();
+        carryCheckCountdown = CARRY_CHECK_INTERVAL_TICKS;
+    }
+
+    /**
+     * Keeps an open browser honest about what the player can currently make.
+     *
+     * <p>{@link #rebuild()} decides which recipes are in the list at all, and it used to run only
+     * when the screen opened. Anything the player reached later -- picking up a modded log, walking
+     * to a crafting table -- therefore stayed invisible until the screen was closed and reopened.
+     * {@link #revalidate()} after a craft could only re-price entries that were already listed; it
+     * cannot add one.
+     *
+     * <p>This adds the missing membership updates without giving up the reason {@code rebuild()} is
+     * avoided mid-session: the settled block of entries keeps its positions and new recipes are only
+     * ever appended at the end, so icons never slide out from under the cursor.
+     *
+     * <p>Called from the {@code broadcastChanges} injection once per player tick, and it deliberately
+     * does almost nothing on most calls: comparing 36 slots is the only work done while nothing has
+     * changed, and the station is only re-checked when the player has actually moved.
+     */
+    public void tickRefresh() {
+        // repaginate() calls broadcastChanges(), and broadcastChanges() is what drives this, so a
+        // refresh must not be able to re-enter itself.
+        if (refreshing || !(player instanceof ServerPlayer serverPlayer) || scan == null) {
+            return;
+        }
+        refreshing = true;
+        try {
+            refreshNow(serverPlayer);
+        } finally {
+            refreshing = false;
+        }
+    }
+
+    private void refreshNow(ServerPlayer serverPlayer) {
+        // A reload replaced the recipe set this list was built from. Nothing held is trustworthy.
+        if (RecipeScanner.epoch() != lastScanEpoch) {
+            rebuild();
+            return;
+        }
+
+        if (carryCheckCountdown > 0) {
+            carryCheckCountdown--;
+            return;
+        }
+        carryCheckCountdown = CARRY_CHECK_INTERVAL_TICKS;
+
+        // Eligibility, not affordability: without a station in range the recipes too big for the
+        // hand grid were never added to the scan at all, so there is nothing incremental to find.
+        // Only re-check that when the player has moved, since it means scanning around them.
+        BlockPos position = serverPlayer.blockPosition();
+        if (lastStationCheckPos == null || !lastStationCheckPos.equals(position)) {
+            lastStationCheckPos = position.immutable();
+            if (IngredientPool.craftingTableInRange(serverPlayer) != lastStationKnown) {
+                rebuild();
+                return;
+            }
+        }
+
+        Map<Item, Integer> carried = IngredientPool.carriedCounts(serverPlayer);
+        if (carried.equals(lastCarriedCounts)) {
+            return;
+        }
+
+        List<Item> changed = new ArrayList<>();
+        for (Map.Entry<Item, Integer> difference : carried.entrySet()) {
+            if (!lastCarriedCounts.getOrDefault(difference.getKey(), 0).equals(difference.getValue())) {
+                changed.add(difference.getKey());
+            }
+        }
+        for (Item gone : lastCarriedCounts.keySet()) {
+            if (!carried.containsKey(gone)) {
+                changed.add(gone);
+            }
+        }
+        lastCarriedCounts = carried;
+
+        if (changed.isEmpty()) {
+            return;
+        }
+
+        pool = IngredientPool.gather(serverPlayer);
+        appendNewlyReachable(serverPlayer, changed);
+    }
+
+    /**
+     * Adds the recipes this refresh made possible, at the end of the list.
+     *
+     * <p>Only recipes that consume something which just changed are considered. An item appearing
+     * in the pool cannot unlock a recipe that does not use it, so {@code byIngredient} turns this
+     * from a second full scan into a handful of planner runs.
+     */
+    private void appendNewlyReachable(ServerPlayer serverPlayer, List<Item> changed) {
+        String query = search.trim().toLowerCase(Locale.ROOT);
+        ItemStack ingredientFilterStack = ingredientFilter.getItem(0);
+        CraftingPlanner planner = new CraftingPlanner(pool, scan.byOutput(), scan.results());
+        List<CraftEntry> added = new ArrayList<>();
+
+        for (Item item : changed) {
+            List<RecipeHolder<CraftingRecipe>> candidates = scan.byIngredient().get(item);
+            if (candidates == null) {
+                continue;
+            }
+            for (RecipeHolder<CraftingRecipe> holder : candidates) {
+                if (added.size() >= MAX_APPENDS_PER_REFRESH) {
+                    break;
+                }
+                if (listedRecipeIds.contains(holder.id())) {
+                    continue;
+                }
+
+                // Same membership rules a full scan applies, or the appended rows would disagree
+                // with the ones rebuild() produced.
+                ItemStack result = scan.results().get(holder);
+                if (result == null || result.isEmpty()) {
+                    continue;
+                }
+                if (!query.isEmpty()
+                        && !result.getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)) {
+                    continue;
+                }
+                if (!ingredientFilterStack.isEmpty()
+                        && !RecipeScanner.usesIngredient(holder.value(), ingredientFilterStack)) {
+                    continue;
+                }
+
+                List<RecipeHolder<CraftingRecipe>> steps = planner.plan(holder.value());
+                if (steps == null) {
+                    continue;
+                }
+
+                added.add(CraftEntry.normal(holder, result, steps));
+                listedRecipeIds.add(holder.id());
+            }
+            if (added.size() >= MAX_APPENDS_PER_REFRESH) {
+                break;
+            }
+        }
+
+        if (added.isEmpty()) {
+            return;
+        }
+
+        List<CraftEntry> grown = new ArrayList<>(entries);
+        grown.addAll(added);
+        entries = grown;
+
+        com.eboac.terracraft.TerraCraft.LOGGER.debug(
+                "browser refresh: {} new entries from {} changed items, {} total",
+                added.size(), changed.size(), entries.size());
 
         repaginate();
     }

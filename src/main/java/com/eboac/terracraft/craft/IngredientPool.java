@@ -5,6 +5,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.level.Level;
@@ -14,8 +15,10 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -158,6 +161,52 @@ public final class IngredientPool {
             sources.add(new Source(container, slot));
             stacks.add(stack);
         }
+    }
+
+    /**
+     * What the player is carrying, as item to total count, without touching the world at all.
+     *
+     * <p>This exists as a cheap dirty-check for the open browser. Deciding what is craftable needs
+     * {@link #gather}, which scans blocks around the player; running that every tick to notice that
+     * nothing changed is the expensive part. Comparing 36 slots is not. When this differs, the real
+     * pool is gathered and the list is updated.
+     *
+     * <p>Counts only the 36 main slots, matching {@link #addPlayerInventory}, and keys on the item
+     * alone rather than on components. A stack whose data changed but whose item and count did not
+     * will not register here. That is deliberate: it makes the check as cheap as the inventory walk
+     * itself, and anything that genuinely changes what can be crafted changes an item or a count.
+     */
+    public static Map<Item, Integer> carriedCounts(Player player) {
+        Map<Item, Integer> counts = new HashMap<>();
+        Inventory inventory = player.getInventory();
+        for (int slot = 0; slot < Inventory.INVENTORY_SIZE; slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            if (!stack.isEmpty()) {
+                counts.merge(stack.getItem(), stack.getCount(), Integer::sum);
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Whether a crafting table sits within {@link #SCAN_RADIUS} of the player.
+     *
+     * <p>The cheap half of {@link #gather}: no container flood, no block-entity lookups, only the
+     * station test. An open browser needs it because a player walking to a table changes which
+     * recipes are *eligible* at all -- the ones too big for the 2x2 hand grid are not even added to
+     * a scan made without a station -- which is a different question from what is affordable.
+     */
+    public static boolean craftingTableInRange(Player player) {
+        Level level = player.level();
+        BlockPos origin = player.blockPosition().immutable();
+        for (BlockPos pos : BlockPos.betweenClosed(
+                origin.offset(-SCAN_RADIUS, -SCAN_RADIUS, -SCAN_RADIUS),
+                origin.offset(SCAN_RADIUS, SCAN_RADIUS, SCAN_RADIUS))) {
+            if (level.isLoaded(pos) && level.getBlockState(pos).getBlock() instanceof CraftingTableBlock) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean hasCraftingTableNearby() {
