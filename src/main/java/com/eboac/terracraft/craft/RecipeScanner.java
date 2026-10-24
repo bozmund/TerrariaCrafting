@@ -1,10 +1,12 @@
 package com.eboac.terracraft.craft;
 
+import com.eboac.terracraft.api.TerraCraftGate;
 import it.unimi.dsi.fastutil.ints.IntList;
 import net.minecraft.core.Holder;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingInput;
@@ -96,6 +98,7 @@ public final class RecipeScanner {
     public static ScanResult scan(MinecraftServer server,
                                   Level level,
                                   IngredientPool pool,
+                                  Player player,
                                   boolean includeUnobtainable,
                                   String search,
                                   ItemStack ingredientFilter) {
@@ -107,6 +110,7 @@ public final class RecipeScanner {
         Map<RecipeHolder<CraftingRecipe>, ItemStack> results = new HashMap<>();
         Map<Item, List<RecipeHolder<CraftingRecipe>>> byOutput = new HashMap<>();
         Map<Item, List<RecipeHolder<CraftingRecipe>>> byIngredient = new HashMap<>();
+        Map<RecipeHolder<CraftingRecipe>, Boolean> known = new HashMap<>();
 
         // Special recipes -- map cloning, firework assembly, armour dyeing, a modded "codex +
         // paper" recipe -- compute their result from the exact item placed (which Cave Codex,
@@ -136,7 +140,8 @@ public final class RecipeScanner {
                         && !icon.getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)) {
                     continue;
                 }
-                specialEntries.add(CraftEntry.special(typedSpecial, icon));
+                specialEntries.add(CraftEntry.special(typedSpecial, icon,
+                        TerraCraftGate.knows(player, typedSpecial, icon)));
                 continue;
             }
 
@@ -156,9 +161,18 @@ public final class RecipeScanner {
 
             @SuppressWarnings("unchecked")
             RecipeHolder<CraftingRecipe> typed = (RecipeHolder<CraftingRecipe>) holder;
+            boolean recipeKnown = TerraCraftGate.knows(player, typed, preview);
             usable.add(typed);
             results.put(typed, preview);
-            byOutput.computeIfAbsent(preview.getItem(), item -> new ArrayList<>()).add(typed);
+            known.put(typed, recipeKnown);
+
+            // A recipe the player is not allowed to make is absent from the planner's index
+            // entirely, not merely dimmed in the list. Otherwise it stays reachable as an
+            // intermediate step of a chain toward something they are allowed to craft, which is the
+            // easiest way for a gate to be walked straight through.
+            if (recipeKnown) {
+                byOutput.computeIfAbsent(preview.getItem(), item -> new ArrayList<>()).add(typed);
+            }
 
             // Indexed by every item the recipe will accept, tags expanded. This is what makes an
             // incremental refresh cheap instead of a second full scan.
@@ -185,7 +199,8 @@ public final class RecipeScanner {
             if (steps == null && !includeUnobtainable) {
                 continue;
             }
-            entries.add(CraftEntry.normal(holder, result, steps));
+            entries.add(CraftEntry.normal(holder, result, steps,
+                    known.getOrDefault(holder, Boolean.TRUE)));
         }
 
         entries.addAll(specialEntries);

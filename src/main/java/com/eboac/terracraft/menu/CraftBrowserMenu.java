@@ -1,5 +1,6 @@
 package com.eboac.terracraft.menu;
 
+import com.eboac.terracraft.api.TerraCraftGate;
 import com.eboac.terracraft.craft.CraftAttempt;
 import com.eboac.terracraft.craft.CraftEntry;
 import com.eboac.terracraft.craft.CraftingPlanner;
@@ -162,7 +163,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         long startedAt = System.nanoTime();
         pool = IngredientPool.gather(serverPlayer);
         scan = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
-                pool, showUncraftable, search, ingredientFilter.getItem(0));
+                pool, serverPlayer, showUncraftable, search, ingredientFilter.getItem(0));
         entries = scan.entries();
         rememberListState(serverPlayer);
         com.eboac.terracraft.TerraCraft.LOGGER.debug(
@@ -192,7 +193,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
             // A special entry has no "steps" to re-plan -- its one bit of state is the icon,
             // which the planner knows nothing about and would only wipe.
             updated.add(entry.special() ? entry
-                    : CraftEntry.normal(entry.holder(), entry.result(), planner.plan(entry.holder().value())));
+                    : CraftEntry.normal(entry.holder(), entry.result(),
+                            planner.plan(entry.holder().value()), entry.known()));
         }
         entries = updated;
 
@@ -343,7 +345,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
                     continue;
                 }
 
-                added.add(CraftEntry.normal(holder, result, steps));
+                added.add(CraftEntry.normal(holder, result, steps,
+                        TerraCraftGate.knows(serverPlayer, holder, result)));
                 listedRecipeIds.add(holder.id());
             }
             if (added.size() >= MAX_APPENDS_PER_REFRESH) {
@@ -490,6 +493,14 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         CraftEntry entry = entries.get(index);
+
+        // The gate is asked again here rather than trusted from the scan that built this list. A
+        // recipe can have become disallowed since the list was made, and a modified client can
+        // click any index it likes. Same rule as the affordability recomputation below: nothing
+        // the client was last told is treated as evidence.
+        if (!TerraCraftGate.knows(serverPlayer, entry.holder(), entry.result())) {
+            return;
+        }
 
         // Never trust the flags the client was last told -- everything is recomputed from the
         // live world here, so clicking faster than the UI updates cannot produce a free item.
