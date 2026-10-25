@@ -1,5 +1,6 @@
 package com.eboac.terracraft.menu;
 
+import com.eboac.terracraft.api.TerraCraftGate;
 import com.eboac.terracraft.craft.CraftAttempt;
 import com.eboac.terracraft.craft.CraftEntry;
 import com.eboac.terracraft.craft.CraftingPlanner;
@@ -102,6 +103,12 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     private long chainMask;
     /** Visible cells that open a real crafting grid instead of crafting directly. */
     private long specialMask;
+    /**
+     * Visible cells a knowledge gate forbids this player to craft. Separate from
+     * {@link #craftableMask} on purpose: a gated recipe is normally perfectly affordable, so it
+     * belongs in craftableMask (it CAN be made) and in lockedMask (it MAY NOT be).
+     */
+    private long lockedMask;
     /** Whether a crafting table is currently within range, same rule as the station check. */
     private boolean tableNearby;
 
@@ -162,7 +169,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         long startedAt = System.nanoTime();
         pool = IngredientPool.gather(serverPlayer);
         scan = RecipeScanner.scan(serverPlayer.level().getServer(), serverPlayer.level(),
-                pool, showUncraftable, search, ingredientFilter.getItem(0));
+                pool, serverPlayer, showUncraftable, search, ingredientFilter.getItem(0));
         entries = scan.entries();
         rememberListState(serverPlayer);
         com.eboac.terracraft.TerraCraft.LOGGER.debug(
@@ -192,7 +199,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
             // A special entry has no "steps" to re-plan -- its one bit of state is the icon,
             // which the planner knows nothing about and would only wipe.
             updated.add(entry.special() ? entry
-                    : CraftEntry.normal(entry.holder(), entry.result(), planner.plan(entry.holder().value())));
+                    : CraftEntry.normal(entry.holder(), entry.result(),
+                            planner.plan(entry.holder().value()), entry.known()));
         }
         entries = updated;
 
@@ -343,7 +351,8 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
                     continue;
                 }
 
-                added.add(CraftEntry.normal(holder, result, steps));
+                added.add(CraftEntry.normal(holder, result, steps,
+                        TerraCraftGate.knows(serverPlayer, holder, result)));
                 listedRecipeIds.add(holder.id());
             }
             if (added.size() >= MAX_APPENDS_PER_REFRESH) {
@@ -380,6 +389,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         craftableMask = 0L;
         chainMask = 0L;
         specialMask = 0L;
+        lockedMask = 0L;
         List<List<ItemStack>> costs = new ArrayList<>(DISPLAY_SLOTS);
         int first = scrollRow * COLUMNS;
         for (int i = 0; i < DISPLAY_SLOTS; i++) {
@@ -388,6 +398,13 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
                 CraftEntry entry = entries.get(index);
                 display.setItem(i, entry.result().copy());
                 costs.add(entry.special() ? List.of() : RecipeScanner.ingredientCounts(entry.holder().value()));
+                if (!entry.known()) {
+                    // Marked locked, and left out of the affordability masks. A cell in craftableMask
+                    // that the server then refuses is the worst version of this: the browser promises
+                    // a craft and takes the click back.
+                    lockedMask |= 1L << i;
+                    continue;
+                }
                 switch (entry.tier()) {
                     case 0 -> craftableMask |= 1L << i;
                     case 1 -> chainMask |= 1L << i;
@@ -405,7 +422,7 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         broadcastChanges();
         ServerPlayNetworking.send(serverPlayer, new BrowserStatePayload(
                 totalEntries, scrollRow, showUncraftable, craftableMask, chainMask, specialMask,
-                tableNearby, visibleIngredients));
+                lockedMask, tableNearby, visibleIngredients));
     }
 
     /** Applies the display controls the client asked for. None of these affect game state. */
@@ -490,6 +507,14 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
         }
 
         CraftEntry entry = entries.get(index);
+
+        // The gate is asked again here rather than trusted from the scan that built this list. A
+        // recipe can have become disallowed since the list was made, and a modified client can
+        // click any index it likes. Same rule as the affordability recomputation below: nothing
+        // the client was last told is treated as evidence.
+        if (!TerraCraftGate.knows(serverPlayer, entry.holder(), entry.result())) {
+            return;
+        }
 
         // Never trust the flags the client was last told -- everything is recomputed from the
         // live world here, so clicking faster than the UI updates cannot produce a free item.
@@ -666,14 +691,15 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     // ------------------------------------------------------------------
 
     public void acceptState(int totalEntries, int scrollRow, boolean showUncraftable,
-                            long craftableMask, long chainMask, long specialMask, boolean tableNearby,
-                            List<List<ItemStack>> ingredients) {
+                            long craftableMask, long chainMask, long specialMask, long lockedMask,
+                            boolean tableNearby, List<List<ItemStack>> ingredients) {
         this.totalEntries = totalEntries;
         this.scrollRow = scrollRow;
         this.showUncraftable = showUncraftable;
         this.craftableMask = craftableMask;
         this.chainMask = chainMask;
         this.specialMask = specialMask;
+        this.lockedMask = lockedMask;
         this.tableNearby = tableNearby;
         this.visibleIngredients = ingredients;
     }
@@ -693,7 +719,17 @@ public class CraftBrowserMenu extends AbstractContainerMenu {
     /** True if the player can get this item, directly or by running intermediate crafts. */
     public boolean isDisplaySlotObtainable(int displaySlot) {
         long bit = 1L << displaySlot;
-        return (craftableMask & bit) != 0L || (chainMask & bit) != 0L;
+        return !isDisplaySlotLocked(displaySlot)
+                && ((craftableMask & bit) != 0L || (chainMask & bit) != 0L);
+    }
+
+    /**
+     * True if a knowledge gate forbids this cell. The recipe is still listed and still shows its
+     * icon and cost -- locked is not absent, and a player who cannot see what they are missing has
+     * no reason to go looking for it.
+     */
+    public boolean isDisplaySlotLocked(int displaySlot) {
+        return (lockedMask & (1L << displaySlot)) != 0L;
     }
 
     /** True if getting this item needs intermediate crafts first. */

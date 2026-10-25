@@ -13,19 +13,25 @@ import net.minecraft.world.item.crafting.RecipeHolder;
  *                armor dyeing, a modded "codex + paper" style recipe -- which the browser cannot
  *                represent as a single click. Clicking a special entry opens a real crafting grid
  *                instead of crafting anything itself.
+ * @param known   whether a {@link com.eboac.terracraft.api.KnowledgeGate} allows this player to make
+ *                it. This is a deliberately separate axis from {@link #tier()}: tier answers "can it
+ *                be afforded", known answers "is it allowed". A recipe can be tier 0 and unknown,
+ *                which is the whole point of showing locked recipes dimmed rather than hiding them.
+ *                With no gate installed every entry is known.
  */
 public record CraftEntry(RecipeHolder<CraftingRecipe> holder,
                          ItemStack result,
                          java.util.List<RecipeHolder<CraftingRecipe>> steps,
-                         boolean special) {
+                         boolean special,
+                         boolean known) {
 
     public static CraftEntry normal(RecipeHolder<CraftingRecipe> holder, ItemStack result,
-                                    java.util.List<RecipeHolder<CraftingRecipe>> steps) {
-        return new CraftEntry(holder, result, steps, false);
+                                    java.util.List<RecipeHolder<CraftingRecipe>> steps, boolean known) {
+        return new CraftEntry(holder, result, steps, false, known);
     }
 
-    public static CraftEntry special(RecipeHolder<CraftingRecipe> holder, ItemStack icon) {
-        return new CraftEntry(holder, icon, java.util.List.of(), true);
+    public static CraftEntry special(RecipeHolder<CraftingRecipe> holder, ItemStack icon, boolean known) {
+        return new CraftEntry(holder, icon, java.util.List.of(), true, known);
     }
 
     /**
