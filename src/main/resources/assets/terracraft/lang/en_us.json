@@ -9,5 +9,6 @@
 	"gui.terracraft.crafter_no_target": "Set a target item",
 	"gui.terracraft.needs": "Needs:",
 	"gui.terracraft.special": "Click to open a crafting table",
+	"gui.terracraft.locked": "You do not know how to make this yet",
 	"gui.terracraft.open_table": "Crafting Grid"
 }

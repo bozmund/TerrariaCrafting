@@ -61,6 +61,11 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
     private static final int COLOUR_UNCRAFTABLE = 0xA0101010;
     private static final int COLOUR_CHAINED = 0xFF5FD068;
     private static final int COLOUR_SPECIAL = 0xFFE0A030;
+    /**
+     * Locked by a knowledge gate: dimmer than reachable, brighter than unreachable, and drawn as a
+     * band rather than a corner mark so it cannot be mistaken for "you lack the materials".
+     */
+    private static final int COLOUR_LOCKED = 0xB03A1E1E;
     private static final int COLOUR_BUTTON_TEXT = 0xFF402A00;
     private static final int COLOUR_TOGGLE_ON = 0xFF4CAF50;
     private static final int COLOUR_TOGGLE_OFF = 0xFF7A7A7A;
@@ -367,7 +372,12 @@ public class CraftBrowserScreen extends AbstractContainerScreen<CraftBrowserMenu
             return;
         }
 
-        if (this.menu.isDisplaySlotSpecial(index)) {
+        if (this.menu.isDisplaySlotLocked(index)) {
+            // Present but not permitted. The icon and its cost stay fully visible underneath the
+            // band: a locked recipe you cannot see gives the player nothing to go and find.
+            graphics.fill(slot.x, slot.y, slot.x + 16, slot.y + 16, COLOUR_LOCKED);
+            graphics.fill(slot.x, slot.y + 7, slot.x + 16, slot.y + 9, COLOUR_SPECIAL);
+        } else if (this.menu.isDisplaySlotSpecial(index)) {
             // Its result depends on the exact item placed -- which written book, which modded
             // codex -- so there is nothing to craft directly. A full-brightness, differently
             // coloured corner mark says "this exists and is reachable" without implying one
